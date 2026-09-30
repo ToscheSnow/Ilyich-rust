@@ -1,10 +1,12 @@
+use std::time::Instant;
+
 pub enum PeerMessage {
   CHOKE,
   UNCHOKE,
   INTERESTED,
   NOT_INTERESTED,
   HAVE {
-    pieceId: usize,
+    piece_id: u32,
   },
 
   BITFIELD {
@@ -14,8 +16,8 @@ pub enum PeerMessage {
   REQUEST(BlockRequest),
 
   PIECE {
-    pieceIdx: usize,
-    offset: usize,
+    piece_id: u32,
+    offset: u32,
     data: Vec<u8>,
   },
 
@@ -26,23 +28,23 @@ pub enum PeerMessage {
 }
 
 pub struct BlockRequest {
-  pub pieceIdx: usize,
-  pub offset: usize,
-  pub length: usize,
+  pub piece_id: u32,
+  pub offset: u32,
+  pub length: u32,
 }
 
 pub struct PendingReq {
-  pub pieceIdx: usize,
-  pub offset: usize,
-  pub length: usize,
+  pub piece_id: u32,
+  pub offset: u32,
+  pub length: u32,
 
-  pub sentAt: usize,
+  pub sent_at: Instant,
 }
 
 pub enum ManagerMessage {
   PieceReceived {
-    pieceIdx: usize,
-    offset: usize,
+    piece_id: u32,
+    offset: u32,
     data: Vec<u8>,
   },
 }

@@ -233,6 +233,7 @@ dependencies = [
 name = "rplay"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "rand 0.10.3",
  "rng",
  "tokio",
