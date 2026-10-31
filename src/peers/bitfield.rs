@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use bytes::{Bytes, BytesMut};
 
-pub fn addPiecesFromBitfield(received_bitfield:Bytes,peer_pieces:&mut HashSet<i32>)->() {
+pub fn add_pieces_from_bitfield(received_bitfield:Bytes, peer_pieces:&mut HashSet<i32>) ->() {
   let mut counter = 0;
 
   for byte in received_bitfield {

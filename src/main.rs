@@ -1,10 +1,10 @@
-mod StorageManager;
-mod peer;
-mod pieceManager;
+mod file_parsing;
+mod peers;
+mod piece_manager;
+mod recon;
 mod protocol;
-mod bitfield;
-mod handshakeBuf;
-mod parsePeerAddress;
-
+mod scheduler;
+mod storage_manager;
+mod torrent;
 
 fn main() {}

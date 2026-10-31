@@ -1,6 +1,7 @@
+use bytes::Bytes;
 use std::time::Instant;
 
-pub enum PeerMessage {
+pub enum PeerEvent {
   CHOKE,
   UNCHOKE,
   INTERESTED,
@@ -10,7 +11,7 @@ pub enum PeerMessage {
   },
 
   BITFIELD {
-    bitfield: Vec<u8>,
+    bitfield: Bytes,
   },
 
   REQUEST(BlockRequest),
@@ -18,13 +19,13 @@ pub enum PeerMessage {
   PIECE {
     piece_id: u32,
     offset: u32,
-    data: Vec<u8>,
+    data: Bytes,
   },
 
   CANCEL(BlockRequest),
 
-  PORT,
-  EXTENDED,
+  PORT(u16),
+  EXTENDED(u8),
 }
 
 pub struct BlockRequest {
@@ -45,6 +46,6 @@ pub enum ManagerMessage {
   PieceReceived {
     piece_id: u32,
     offset: u32,
-    data: Vec<u8>,
+    data: Bytes,
   },
 }

@@ -1,6 +1,6 @@
 use bytes::{Bytes, BytesMut};
 
-pub fn handshake_buf(info_hash:Bytes,CLIENT_ID:Bytes)->Bytes {
+pub fn handshake_buf(info_hash: Bytes, CLIENT_ID: Bytes) -> Bytes {
   let mut buf = BytesMut::zeroed(68);
   // write pstrlen ie 1 byte
   buf[0] = 0x13;
