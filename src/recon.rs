@@ -1,51 +1,64 @@
-use std::{collections::HashMap, hash::Hash, sync::Arc};
-
-use tokio::sync::{
-  self,
-  mpsc::{UnboundedReceiver, UnboundedSender},
+use std::{
+  collections::{HashMap, HashSet},
+  hash::Hash,
+  sync::Arc,
 };
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
+/// Implemented by your event enum: "which topic am I?"
+pub trait Event: Clone {
+  type Topic: Eq + Hash + Copy;
+  fn topic(&self) -> Self::Topic;
+}
+
+/// Announce-only handle. Cheap to clone (it's an Arc), hand it to anyone.
 #[derive(Clone)]
-pub struct Recon<E> {
-  listeners: Arc<HashMap<E, Vec<UnboundedSender<E>>>>,
+pub struct Recon<E: Event> {
+  routes: Arc<HashMap<E::Topic, Box<[UnboundedSender<E>]>>>,
 }
 
-impl<E: Eq + Hash + Clone> Recon<E> {
-  fn announce(&self, event: E) {
-    let listeners = self
-      .listeners
-      .get(&event)
-      .expect("Only permitted torrent events");
-
-    for listener in listeners {
-      listener.send(event.clone());
+impl<E: Event> Recon<E> {
+  /// One hash lookup, then a send into each interested channel. No locks.
+  pub fn announce(&self, event: E) {
+    if let Some(subs) = self.routes.get(&event.topic()) {
+      for tx in subs.iter() {
+        // receiver dropped? ignore
+        let _ = tx.send(event.clone());
+      }
     }
   }
 }
 
-pub struct ReconBuilder<E> {
-  listeners: HashMap<E, Vec<UnboundedSender<E>>>,
+pub struct ReconBuilder<E: Event> {
+  routes: HashMap<E::Topic, Vec<UnboundedSender<E>>>,
 }
 
-impl<E: Eq + std::hash::Hash + Clone> ReconBuilder<E> {
-  fn new() -> Self {
-    ReconBuilder {
-      listeners: HashMap::new(),
+impl<E: Event> ReconBuilder<E> {
+  pub fn new() -> Self {
+    Self {
+      routes: HashMap::new(),
     }
   }
 
-  fn subscribe(&mut self, event: E) -> UnboundedReceiver<E> {
-    let (tx, rx) = sync::mpsc::unbounded_channel::<E>();
-    let list = self.listeners.entry(event).or_default();
-
-    list.push(tx);
-
+  /// One receiver, many topics.
+  pub fn subscribe(&mut self, topics: impl IntoIterator<Item = E::Topic>) -> UnboundedReceiver<E> {
+    let (tx, rx) = mpsc::unbounded_channel();
+    let unique: HashSet<_> = topics.into_iter().collect(); // no double delivery
+    for topic in unique {
+      self.routes.entry(topic).or_default().push(tx.clone());
+    }
     rx
   }
 
-  fn build(self) -> Recon<E> {
+  /// Freezes the routing table. Consumes the builder, so nobody can subscribe afterwards.
+  pub fn build(self) -> Recon<E> {
+    let routes = self
+      .routes
+      .into_iter()
+      .map(|(topic, subs)| (topic, subs.into_boxed_slice()))
+      .collect();
     Recon {
-      listeners: self.listeners.into(),
+      routes: Arc::new(routes),
     }
   }
 }

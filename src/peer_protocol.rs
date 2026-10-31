@@ -5,7 +5,7 @@ pub enum PeerEvent {
   CHOKE,
   UNCHOKE,
   INTERESTED,
-  NOT_INTERESTED,
+  NotInterested,
   HAVE {
     piece_id: u32,
   },
@@ -28,6 +28,7 @@ pub enum PeerEvent {
   EXTENDED(u8),
 }
 
+#[derive(Clone)]
 pub struct BlockRequest {
   pub piece_id: u32,
   pub offset: u32,

@@ -1,4 +1,4 @@
-use crate::protocol::{BlockRequest, PeerEvent};
+use crate::peer_protocol::{BlockRequest, PeerEvent};
 use bytes::Bytes;
 
 pub fn parse_peer_event(message: Bytes) -> Result<PeerEvent, String> {
@@ -11,7 +11,7 @@ pub fn parse_peer_event(message: Bytes) -> Result<PeerEvent, String> {
     0 => PeerEvent::CHOKE,
     1 => PeerEvent::UNCHOKE,
     2 => PeerEvent::INTERESTED,
-    3 => PeerEvent::NOT_INTERESTED,
+    3 => PeerEvent::NotInterested,
 
     4 => {
       if message.len() != 5 {

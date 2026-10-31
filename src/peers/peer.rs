@@ -1,30 +1,31 @@
 use std::{
   collections::{HashMap, HashSet},
+  os::unix::net::SocketAddr,
   time::Instant,
 };
 
 use tokio::{
   net::tcp::{OwnedReadHalf, OwnedWriteHalf},
   select,
-  sync::{mpsc, oneshot},
+  sync::mpsc,
 };
 
-use crate::protocol::PeerEvent;
-use crate::{
-  protocol::{BlockRequest, ManagerMessage, PendingReq},
-  recon::Recon,
-  torrent::TorrentEvent,
-};
-use bytes::{Buf, BufMut, Bytes, BytesMut, buf};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::peers::parse_peer_event::parse_peer_event;
+use crate::{
+  event::TorrentEvent::{self},
+  peer_protocol::{BlockRequest, ManagerMessage, PeerEvent, PendingReq},
+  peers::{bitfield::add_pieces_from_bitfield, parse_peer_event::parse_peer_event},
+  recon::Recon,
+};
 
 pub enum PeerCommand {
   Request(BlockRequest),
   Have(u32),
   SendBlock(BlockRequest, Bytes),
   SendBitfield(Bytes),
+  Shutdown,
 }
 
 pub struct PeerState {
@@ -46,6 +47,8 @@ impl Default for PeerState {
 }
 
 pub struct Peer {
+  total_pieces: u32,
+
   recon: Recon<TorrentEvent>,
 
   state: PeerState,
@@ -58,10 +61,15 @@ pub struct Peer {
   outgoing_req: mpsc::Sender<Bytes>,
 
   incoming_command: mpsc::Receiver<PeerCommand>,
+
+  peer_handle: PeerHandle,
 }
 
+#[derive(Clone)]
 pub struct PeerHandle {
-  cmd_sender: mpsc::Sender<PeerCommand>,
+  pub cmd_sender: mpsc::Sender<PeerCommand>,
+  pub addr: SocketAddr,
+  pub remote_peer_id: [u8; 20],
 }
 
 impl Peer {
@@ -134,6 +142,8 @@ impl Peer {
     }
   }
 
+  fn disconnect(&mut self) {}
+
   async fn process_cmd(&mut self, cmd: PeerCommand) {
     match cmd {
       PeerCommand::Request(block_req) => {
@@ -150,6 +160,10 @@ impl Peer {
 
       PeerCommand::SendBitfield(bitfield) => {
         self.send_bitfield_buf(&bitfield).await;
+      }
+
+      PeerCommand::Shutdown => {
+        self.disconnect();
       }
     }
   }
@@ -189,6 +203,12 @@ impl Peer {
     match message {
       PeerEvent::CHOKE => {
         self.state.peer_choking = true;
+        self.pending_requests.clear();
+
+        // tell recon
+        self
+          .recon
+          .announce(TorrentEvent::Choke(self.peer_handle.clone()));
 
         //tell scheduler , stats, peerManager
       }
@@ -199,22 +219,32 @@ impl Peer {
         //tell scheduler , stats, peerManager
       }
 
+      // done
       PeerEvent::INTERESTED => {
+        println!("🧩 Someone is interested");
+
         self.state.peer_interested = true;
         self.state.am_choking = false;
 
-        // tell scheduler
+        self.unchoke_req().await;
       }
-      PeerEvent::NOT_INTERESTED => {
-        self.state.peer_interested = false;
 
+      // done
+      PeerEvent::NotInterested => {
+        self.state.peer_interested = false;
         // do nothing
       }
 
+      // done
       PeerEvent::HAVE { piece_id } => {
         self.available_pieces.insert(piece_id);
 
-        //send a UNCHOKE_Req
+        if self.available_pieces.len() as u32 == self.total_pieces {
+          // tell seeder is there
+          self
+            .recon
+            .announce(TorrentEvent::SeederConnect(self.peer_handle.clone()));
+        }
       }
 
       PeerEvent::REQUEST(BlockRequest {
@@ -225,10 +255,12 @@ impl Peer {
         if self.state.am_choking {
           return;
         }
+        // tell using upwards command instead of event bus
 
         //announce to the event bus😨
       }
 
+      //done
       PeerEvent::PIECE {
         piece_id,
         offset,
@@ -260,26 +292,33 @@ impl Peer {
       }
 
       PeerEvent::BITFIELD { bitfield } => {
-        // add_pieces_from_bitfield(bitfield,self.available_pieces);
+        add_pieces_from_bitfield(bitfield, &mut self.available_pieces);
 
+        self.recon.announce(TorrentEvent::Bitfield);
         //Send interested Req;
+        self.interested_req().await;
 
         // announce to the subs
+        if self.available_pieces.len() as u32 == self.total_pieces {
+          self
+            .recon
+            .announce(TorrentEvent::SeederConnect(self.peer_handle.clone()));
+        }
         return;
       }
 
-      PeerEvent::CANCEL(block_request) => {
+      PeerEvent::CANCEL(_) => {
         // not implemented and not important
         return;
       }
 
-      PeerEvent::PORT(dhtPort) => {
-        println!("Found a dht port :{dhtPort}");
+      PeerEvent::PORT(dht_port) => {
+        println!("Found a dht port :{dht_port}");
         return;
       }
 
-      PeerEvent::EXTENDED(extendedMessageId) => {
-        println!("Received a extendedMessageId: {extendedMessageId}");
+      PeerEvent::EXTENDED(extended_message_id) => {
+        println!("Received a extendedMessageId: {extended_message_id}");
         return;
       }
     }

@@ -1,10 +1,13 @@
+mod event;
 mod file_parsing;
+mod peer_protocol;
 mod peers;
-mod piece_manager;
+mod pieces;
 mod recon;
-mod protocol;
 mod scheduler;
 mod storage_manager;
 mod torrent;
+mod trackers;
 
-fn main() {}
+#[tokio::main]
+async fn main() {}

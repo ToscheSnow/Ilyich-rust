@@ -1,18 +1,21 @@
-use std::{collections::HashSet, time::Duration};
+use std::{
+  collections::HashSet,
+  sync::{Arc, RwLock},
+  time::Duration,
+};
 
 use bytes::{Bytes, BytesMut};
-use tokio::{
-  io::AsyncWriteExt,
-  net::TcpStream,
-  task::{self, JoinSet},
-  time::timeout,
-};
+use tokio::{io::AsyncWriteExt, net::TcpStream, task::JoinSet, time::timeout};
 
 use tokio::io::AsyncReadExt;
 
 use tokio::sync::mpsc;
 
-use crate::{peers::peer::Peer, recon::Recon, torrent::TorrentEvent};
+use crate::{
+  event::TorrentEvent,
+  peers::peer::{Peer, PeerHandle},
+  recon::Recon,
+};
 
 enum PeerMessage {}
 
@@ -23,7 +26,7 @@ enum PeerStatus {
 
 pub struct PeerManager {
   connecting_peers: HashSet<String>,
-  active_peers: HashSet<String>,
+  active_peers: Arc<RwLock<HashSet<PeerHandle>>>,
   info_hash: Bytes,
 
   recon_listener: mpsc::UnboundedReceiver<TorrentEvent>,
@@ -31,13 +34,40 @@ pub struct PeerManager {
 
   peer_message_sender: mpsc::Sender<PeerMessage>,
   peer_message_receiver: mpsc::Receiver<PeerMessage>,
-
-  connections: task::JoinSet<Result<String>, E>,
 }
 
 impl PeerManager {
+  fn add_addresses(&mut self, new_peer_addresses: Vec<String>) {
+    for address in &new_peer_addresses {
+      //trigger connect to new peers;
+      if self.connecting_peers.contains(address) {
+        continue;
+      }
+
+      self.connecting_peers.insert(address.clone());
+      let peer_address = address.clone();
+
+      let peer_status_transmitter = self.peer_status_sender.clone();
+
+      let info_hash = self.info_hash.clone();
+
+      let peer_recon = self.recon.clone();
+
+      let _ = self.connections(async move {
+        connect_peer(
+          peer_recon,
+          peer_address,
+          peer_status_transmitter,
+          info_hash,
+          CLIENT_ID_BYTES,
+        )
+        .await;
+      });
+    }
+  }
+
   pub fn new(
-    active_peers: HashSet<Peer>,
+    active_peers: Arc<RwLock<HashSet<PeerHandle>>>,
     info_hash: Bytes,
     recon: Recon<TorrentEvent>,
     recon_listener: mpsc::UnboundedReceiver<TorrentEvent>,
@@ -75,35 +105,6 @@ impl PeerManager {
           Some(result) = self.connections.join_next() => {
 
           }
-      }
-    }
-
-    fn add_addresses(&mut self, new_peer_addresses: Vec<String>) {
-      for address in &new_peer_addresses {
-        //trigger connect to new peers;
-        if self.connecting_peers.contains(address) {
-          continue;
-        }
-
-        self.connecting_peers.insert(address.clone());
-        let peer_address = address.clone();
-
-        let peer_status_transmitter = self.peer_status_sender.clone();
-
-        let info_hash = self.info_hash.clone();
-
-        let peer_recon = self.recon.clone();
-
-        let _ = self.connections(async move {
-          connect_peer(
-            peer_recon,
-            peer_address,
-            peer_status_transmitter,
-            info_hash,
-            CLIENT_ID_BYTES,
-          )
-          .await;
-        });
       }
     }
   }

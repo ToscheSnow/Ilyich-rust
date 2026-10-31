@@ -1,7 +1,7 @@
 mod bitfield;
-mod client;
+pub mod client;
 mod handshake_buf;
 mod parse_peer_event;
-mod peer;
+pub(crate) mod peer;
 mod peer_manager;
 mod verify_handshake;
