@@ -181,8 +181,6 @@ impl Peer {
     }
   }
 
-
-
   async fn process_cmd(&mut self, cmd: PeerCommand) {
     match cmd {
       PeerCommand::Request(block_req) => {
@@ -207,7 +205,6 @@ impl Peer {
     }
   }
 
-
   fn disconnect(&mut self) {
     self.pending_requests.clear();
 
@@ -215,7 +212,6 @@ impl Peer {
       .recon
       .announce(TorrentEvent::Disconnect(self.peer_handle.clone()));
   }
-
 
   fn read_message(buf: &mut BytesMut) -> Option<Bytes> {
     if buf.len() < 4 {
@@ -287,7 +283,7 @@ impl Peer {
 
       //done
       PeerEvent::REQUEST(BlockRequest {
-        piece_id,
+        piece_idx,
         offset,
         length,
       }) => {
@@ -299,7 +295,7 @@ impl Peer {
           .piece_manager_sender
           .send(PieceManagerMessage::IncomingRequest(IncomingRequest {
             incoming_request: BlockRequest {
-              piece_id,
+              piece_idx,
               offset,
               length,
             },
@@ -381,7 +377,7 @@ impl Peer {
 
   pub async fn request(&mut self, req: BlockRequest) {
     let BlockRequest {
-      piece_id,
+      piece_idx,
       offset,
       length,
     } = req;
@@ -389,14 +385,14 @@ impl Peer {
     let mut buf = BytesMut::with_capacity(17);
     buf.put_u32(13);
     buf.put_u8(6);
-    buf.put_u32(piece_id);
+    buf.put_u32(piece_idx);
     buf.put_u32(offset);
     buf.put_u32(length);
 
     self.pending_requests.insert(
-      (piece_id, offset),
+      (piece_idx, offset),
       PendingReq {
-        piece_id,
+        piece_idx,
         offset,
         length,
         sent_at: Instant::now(),
@@ -428,12 +424,12 @@ impl Peer {
     self.outgoing_req.send(buf.freeze()).await.unwrap();
   }
 
-  pub async fn send_have_req(&mut self, piece_id: u32) {
+  pub async fn send_have_req(&mut self, piece_idx: u32) {
     let mut have_buf = BytesMut::with_capacity(9);
 
     have_buf.put_u32(5);
     have_buf.put_u8(4);
-    have_buf.put_u32(piece_id);
+    have_buf.put_u32(piece_idx);
 
     //req queue channel push
     self.outgoing_req.send(have_buf.freeze()).await.unwrap();
@@ -441,7 +437,7 @@ impl Peer {
 
   pub async fn send_piece(&mut self, req: BlockRequest, block_buf: &[u8]) {
     let BlockRequest {
-      piece_id, offset, ..
+      piece_idx, offset, ..
     } = req;
     let mut buf = BytesMut::with_capacity(4 + 1 + 4 + 4 + block_buf.len());
 
@@ -449,7 +445,7 @@ impl Peer {
 
     buf.put_u8(7);
 
-    buf.put_u32(piece_id);
+    buf.put_u32(piece_idx);
     buf.put_u32(offset);
 
     buf.extend_from_slice(block_buf);

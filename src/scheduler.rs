@@ -3,8 +3,8 @@ use std::{
   sync::{Arc, RwLock, mpsc},
 };
 
-use crate::pieces::piece_manager::PieceManagerHandle;
-use crate::{event::TorrentEvent, peers::peer::PeerHandle, recon::Recon};
+use crate::{event::event::TorrentEvent, pieces::piece_manager::PieceManagerHandle};
+use crate::{ peers::peer::PeerHandle, recon::Recon};
 
 pub struct PieceInfo {
   piece_idx: u32,

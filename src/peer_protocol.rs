@@ -30,13 +30,13 @@ pub enum PeerEvent {
 
 #[derive(Clone)]
 pub struct BlockRequest {
-  pub piece_id: u32,
+  pub piece_idx: u32,
   pub offset: u32,
   pub length: u32,
 }
 
 pub struct PendingReq {
-  pub piece_id: u32,
+  pub piece_idx: u32,
   pub offset: u32,
   pub length: u32,
 

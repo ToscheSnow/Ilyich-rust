@@ -5,4 +5,4 @@ pub const CLIENT_ID_BYTES: &[u8] = &[
 
 pub const CLIENT_ID_STRING: &str = "67697665206D6520736E6F7762756E6E69657321";
 
-pub const BLOCK_SIZE: usize = 16 * 1024;
+pub const BLOCK_SIZE: u16 = 16 * 1024;

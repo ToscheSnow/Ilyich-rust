@@ -30,7 +30,7 @@ pub fn parse_peer_event(message: Bytes) -> Result<PeerEvent, String> {
         return Err(format!("Invalid REQUEST message length: {}", message.len()));
       }
       PeerEvent::REQUEST(BlockRequest {
-        piece_id: u32::from_be_bytes(message[1..5].try_into().unwrap()),
+        piece_idx: u32::from_be_bytes(message[1..5].try_into().unwrap()),
         offset: u32::from_be_bytes(message[5..9].try_into().unwrap()),
         length: u32::from_be_bytes(message[9..13].try_into().unwrap()),
       })
@@ -41,9 +41,9 @@ pub fn parse_peer_event(message: Bytes) -> Result<PeerEvent, String> {
         return Err(format!("PIECE message length too short: {}", message.len()));
       }
       PeerEvent::PIECE {
-        piece_id: u32::from_be_bytes(message[1..5].try_into().unwrap()),
+        piece_idx: u32::from_be_bytes(message[1..5].try_into().unwrap()),
         offset: u32::from_be_bytes(message[5..9].try_into().unwrap()),
-        data: Bytes::copy_from_slice(&message[9..]),
+        block: Bytes::copy_from_slice(&message[9..]),
       }
     }
 
@@ -52,7 +52,7 @@ pub fn parse_peer_event(message: Bytes) -> Result<PeerEvent, String> {
         return Err(format!("Invalid CANCEL message length: {}", message.len()));
       }
       PeerEvent::CANCEL(BlockRequest {
-        piece_id: u32::from_be_bytes(message[1..5].try_into().unwrap()),
+        piece_idx: u32::from_be_bytes(message[1..5].try_into().unwrap()),
         offset: u32::from_be_bytes(message[5..9].try_into().unwrap()),
         length: u32::from_be_bytes(message[9..13].try_into().unwrap()),
       })
