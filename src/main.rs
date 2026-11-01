@@ -8,6 +8,8 @@ mod scheduler;
 mod storage_manager;
 mod torrent;
 mod trackers;
+mod stats;
+mod utils;
 
 #[tokio::main]
 async fn main() {}

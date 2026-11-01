@@ -1,7 +1,5 @@
 use std::{
-  collections::{HashMap, HashSet},
-  os::unix::net::SocketAddr,
-  time::Instant,
+  collections::{HashMap, HashSet}, net::SocketAddr, sync::RwLock, time::Instant, vec,
 };
 
 use tokio::{
@@ -16,7 +14,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::{
   event::TorrentEvent::{self},
   peer_protocol::{BlockRequest, ManagerMessage, PeerEvent, PendingReq},
-  peers::{bitfield::add_pieces_from_bitfield, parse_peer_event::parse_peer_event},
+  peers::parse_peer_event::parse_peer_event,
   recon::Recon,
 };
 
@@ -55,7 +53,7 @@ pub struct Peer {
   piece_manager_sender: mpsc::Sender<ManagerMessage>,
   pending_requests: HashMap<(u32, u32), PendingReq>,
 
-  available_pieces: HashSet<u32>,
+  available_pieces: RwLock<Vec<u8>>,
 
   incoming_req: mpsc::Receiver<Bytes>,
   outgoing_req: mpsc::Sender<Bytes>,
@@ -65,11 +63,26 @@ pub struct Peer {
   peer_handle: PeerHandle,
 }
 
+use std::hash::{Hash, Hasher};
+
 #[derive(Clone)]
 pub struct PeerHandle {
-  pub cmd_sender: mpsc::Sender<PeerCommand>,
-  pub addr: SocketAddr,
-  pub remote_peer_id: [u8; 20],
+    pub cmd_sender: mpsc::Sender<PeerCommand>,
+    pub addr: SocketAddr,
+    pub remote_peer_id: [u8; 20],
+}
+
+impl PartialEq for PeerHandle {
+    fn eq(&self, other: &Self) -> bool {
+        self.addr == other.addr
+    }
+}
+impl Eq for PeerHandle {}
+
+impl Hash for PeerHandle {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.addr.hash(state);
+    }
 }
 
 impl Peer {
@@ -237,7 +250,7 @@ impl Peer {
 
       // done
       PeerEvent::HAVE { piece_id } => {
-        self.available_pieces.insert(piece_id);
+        self.available_pieces(piece_id);
 
         if self.available_pieces.len() as u32 == self.total_pieces {
           // tell seeder is there

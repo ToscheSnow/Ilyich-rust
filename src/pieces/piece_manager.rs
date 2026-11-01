@@ -4,15 +4,15 @@ use bytes::Bytes;
 use tokio::sync::mpsc;
 
 use crate::{
-  event::TorrentEvent, pieces::piece_validator::PieceValidator, recon::Recon,
+  event::TorrentEvent, pieces::piece_geometry::PieceGeometry, recon::Recon,
   storage_manager::StorageManager,
 };
 
 #[derive(Clone)]
 pub struct Piece {
-  piece_idx: u32,
-  offset: u32,
-  block: Bytes,
+  pub piece_idx: u32,
+  pub offset: u32,
+  pub block: Bytes,
 }
 
 enum PieceCommand {}
@@ -28,7 +28,7 @@ pub struct PieceManager {
 
   incoming_cmd: mpsc::Receiver<PieceCommand>,
 
-  validator: PieceValidator,
+  validator: PieceGeometry,
   hashes: Bytes,
   verified_pieces: Arc<HashSet<u32>>,
 

@@ -22,7 +22,7 @@ enum SchedulerEvent {
 }
 
 pub struct Scheduler {
-  MAX_ACTIVE_PIECES: u16,
+  max_active_pieces: u16,
   pieces_in_slot: HashSet<u32>,
 
   active_peers: Arc<RwLock<HashSet<PeerHandle>>>,

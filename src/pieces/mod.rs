@@ -1,2 +1,4 @@
 pub mod piece_manager;
-mod piece_validator;
+mod piece_geometry;
+mod verify_piece;
+mod bitfield;

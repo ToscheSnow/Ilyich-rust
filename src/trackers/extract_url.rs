@@ -1,5 +1,5 @@
 use crate::file_parsing::parser_types::{BencodeDict, BencodeVal};
-use std::{collections::HashSet};
+use std::collections::HashSet;
 
 pub fn extract_tracker_urls(decoded_torrent: &BencodeDict) -> (Vec<String>, Vec<String>) {
   let mut http_urls = HashSet::new();
@@ -15,11 +15,13 @@ pub fn extract_tracker_urls(decoded_torrent: &BencodeDict) -> (Vec<String>, Vec<
           if let BencodeVal::Bytes(tracker_bytes) = tracker_bytes {
             let url = String::from_utf8_lossy(tracker_bytes).into_owned();
             if is_http_tracker(&url) {
-              http_urls.insert(url);
-              http_count += 1;
+              if http_urls.insert(url) {
+                http_count += 1;
+              }
             } else if is_udp_tracker(&url) {
-              udp_urls.insert(url);
-              udp_count += 1;
+              if udp_urls.insert(url) {
+                udp_count += 1;
+              }
             }
           }
         }
