@@ -1,8 +1,7 @@
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::{
-  events::{Topic, TorrentEvent},
-  recon::{Recon, ReconBuilder},
+  event::event::{Topic, TorrentEvent}, recon::{Recon, ReconBuilder},
 };
 
 pub struct Receivers {

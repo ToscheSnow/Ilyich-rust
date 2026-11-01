@@ -1,5 +1,8 @@
 use std::{
-  collections::{HashMap, HashSet}, net::SocketAddr, sync::RwLock, time::Instant, vec,
+  collections::HashMap,
+  net::SocketAddr,
+  sync::{Arc, RwLock},
+  time::Instant,
 };
 
 use tokio::{
@@ -12,9 +15,13 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{
-  event::TorrentEvent::{self},
-  peer_protocol::{BlockRequest, ManagerMessage, PeerEvent, PendingReq},
+  event::event::TorrentEvent::{self, Unchoke},
+  peer_protocol::{BlockRequest, PeerEvent, PendingReq},
   peers::parse_peer_event::parse_peer_event,
+  pieces::{
+    bitfield::{add_piece, count_pieces, has_piece},
+    piece_manager::{IncomingRequest, Piece, PieceManagerMessage},
+  },
   recon::Recon,
 };
 
@@ -27,19 +34,21 @@ pub enum PeerCommand {
 }
 
 pub struct PeerState {
-  peer_choking: bool,
-  peer_interested: bool,
+  // i can not send
   am_choking: bool,
-  am_interested: bool,
+  // i can not receive
+  peer_choking: bool,
+  // they want something
+  peer_interested: bool,
 }
 
 impl Default for PeerState {
   fn default() -> Self {
+    // based on BEP 3 specification
     PeerState {
+      am_choking: true,
       peer_choking: true,
       peer_interested: false,
-      am_choking: true,
-      am_interested: false,
     }
   }
 }
@@ -50,10 +59,10 @@ pub struct Peer {
   recon: Recon<TorrentEvent>,
 
   state: PeerState,
-  piece_manager_sender: mpsc::Sender<ManagerMessage>,
   pending_requests: HashMap<(u32, u32), PendingReq>,
 
-  available_pieces: RwLock<Vec<u8>>,
+  available_pieces: Arc<RwLock<Vec<u8>>>,
+  available_piece_count: u32,
 
   incoming_req: mpsc::Receiver<Bytes>,
   outgoing_req: mpsc::Sender<Bytes>,
@@ -61,28 +70,30 @@ pub struct Peer {
   incoming_command: mpsc::Receiver<PeerCommand>,
 
   peer_handle: PeerHandle,
+  piece_manager_sender: tokio::sync::mpsc::Sender<PieceManagerMessage>,
 }
 
 use std::hash::{Hash, Hasher};
 
 #[derive(Clone)]
 pub struct PeerHandle {
-    pub cmd_sender: mpsc::Sender<PeerCommand>,
-    pub addr: SocketAddr,
-    pub remote_peer_id: [u8; 20],
+  pub cmd_sender: mpsc::Sender<PeerCommand>,
+  pub addr: SocketAddr,
+  pub remote_peer_id: [u8; 20],
+  pub available_pieces: Arc<RwLock<Vec<u8>>>,
 }
 
 impl PartialEq for PeerHandle {
-    fn eq(&self, other: &Self) -> bool {
-        self.addr == other.addr
-    }
+  fn eq(&self, other: &Self) -> bool {
+    self.addr == other.addr
+  }
 }
 impl Eq for PeerHandle {}
 
 impl Hash for PeerHandle {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.addr.hash(state);
-    }
+  fn hash<H: Hasher>(&self, state: &mut H) {
+    self.addr.hash(state);
+  }
 }
 
 impl Peer {
@@ -117,21 +128,36 @@ impl Peer {
   async fn run(mut self) {
     loop {
       select! {
-        Some(cmd) = self.incoming_command.recv() => {
-          self.process_cmd(cmd).await;
+        cmd = self.incoming_command.recv() => match cmd {
+          Some(PeerCommand::Shutdown) | None => break,
+          Some(cmd) => self.process_cmd(cmd).await,
         },
 
-       Some(msg) = self.incoming_req.recv() => {
-          match parse_peer_event(msg) {
-            Ok(event) => {
-              self.process_event(event).await;
-            },
-            Err(err) => {
-              println!("{err}");
-            }
-          }
+        msg = self.incoming_req.recv() => match msg {
+          Some(raw) => match parse_peer_event(raw) {
+            Ok(event) => self.process_event(event).await,
+            Err(err) => println!("{err}"),
+          },
+          None => break, // socket reader died 💀
         },
-        else => break,
+      }
+    }
+
+    self.disconnect();
+  }
+
+  async fn start_outgoing_writer(
+    mut writer: OwnedWriteHalf,
+    mut to_outgoing: mpsc::Receiver<Bytes>,
+  ) {
+    loop {
+      match to_outgoing.recv().await {
+        Some(bytes) => {
+          if writer.write_all(&bytes).await.is_err() {
+            break;
+          }
+        }
+        None => break,
       }
     }
   }
@@ -155,7 +181,7 @@ impl Peer {
     }
   }
 
-  fn disconnect(&mut self) {}
+
 
   async fn process_cmd(&mut self, cmd: PeerCommand) {
     match cmd {
@@ -164,7 +190,7 @@ impl Peer {
       }
 
       PeerCommand::Have(piece_idx) => {
-        self.have_req(piece_idx).await;
+        self.send_have_req(piece_idx).await;
       }
 
       PeerCommand::SendBlock(requested_block, bytes) => {
@@ -181,21 +207,15 @@ impl Peer {
     }
   }
 
-  async fn start_outgoing_writer(
-    mut writer: OwnedWriteHalf,
-    mut to_outgoing: mpsc::Receiver<Bytes>,
-  ) {
-    loop {
-      match to_outgoing.recv().await {
-        Some(bytes) => {
-          if writer.write_all(&bytes).await.is_err() {
-            break;
-          }
-        }
-        None => break,
-      }
-    }
+
+  fn disconnect(&mut self) {
+    self.pending_requests.clear();
+
+    self
+      .recon
+      .announce(TorrentEvent::Disconnect(self.peer_handle.clone()));
   }
+
 
   fn read_message(buf: &mut BytesMut) -> Option<Bytes> {
     if buf.len() < 4 {
@@ -222,13 +242,12 @@ impl Peer {
         self
           .recon
           .announce(TorrentEvent::Choke(self.peer_handle.clone()));
-
-        //tell scheduler , stats, peerManager
       }
 
+      //done
       PeerEvent::UNCHOKE => {
         self.state.peer_choking = false;
-
+        self.recon.announce(Unchoke(self.peer_handle.clone()));
         //tell scheduler , stats, peerManager
       }
 
@@ -239,7 +258,7 @@ impl Peer {
         self.state.peer_interested = true;
         self.state.am_choking = false;
 
-        self.unchoke_req().await;
+        self.send_unchoke_req().await;
       }
 
       // done
@@ -249,10 +268,16 @@ impl Peer {
       }
 
       // done
-      PeerEvent::HAVE { piece_id } => {
-        self.available_pieces(piece_id);
+      PeerEvent::HAVE { piece_idx } => {
+        {
+          let mut bitfield = self.available_pieces.write().unwrap();
+          if !has_piece(&bitfield, piece_idx as usize) {
+            self.available_piece_count += 1;
+            add_piece(&mut bitfield, piece_idx as usize);
+          };
+        }
 
-        if self.available_pieces.len() as u32 == self.total_pieces {
+        if self.available_piece_count as u32 == self.total_pieces {
           // tell seeder is there
           self
             .recon
@@ -260,6 +285,7 @@ impl Peer {
         }
       }
 
+      //done
       PeerEvent::REQUEST(BlockRequest {
         piece_id,
         offset,
@@ -269,24 +295,33 @@ impl Peer {
           return;
         }
         // tell using upwards command instead of event bus
-
-        //announce to the event bus😨
+        let _ = self
+          .piece_manager_sender
+          .send(PieceManagerMessage::IncomingRequest(IncomingRequest {
+            incoming_request: BlockRequest {
+              piece_id,
+              offset,
+              length,
+            },
+            outgoing_sender: self.outgoing_req.clone(),
+          }))
+          .await;
       }
 
       //done
       PeerEvent::PIECE {
-        piece_id,
+        piece_idx,
         offset,
-        data,
+        block,
       } => {
-        let piece_key = &(piece_id, offset);
+        let piece_key = &(piece_idx, offset);
 
         let Some(pending_req) = self.pending_requests.get(piece_key) else {
           eprintln!("Received unexpected piece");
           return;
         };
 
-        if pending_req.length != data.len() as u32 {
+        if pending_req.length != block.len() as u32 {
           println!("Received block with incorrect length");
           return;
         }
@@ -295,41 +330,48 @@ impl Peer {
 
         self
           .piece_manager_sender
-          .send(ManagerMessage::PieceReceived {
-            piece_id,
+          .send(PieceManagerMessage::IncomingBlock(Piece {
+            piece_idx,
             offset,
-            data,
-          })
+            block,
+          }))
           .await
           .unwrap();
       }
 
+      //done
       PeerEvent::BITFIELD { bitfield } => {
-        add_pieces_from_bitfield(bitfield, &mut self.available_pieces);
+        {
+          let mut curr_bitfield = self.available_pieces.write().unwrap();
+          *curr_bitfield = bitfield.into();
+          self.available_piece_count = count_pieces(&curr_bitfield) as u32;
+        }
 
         self.recon.announce(TorrentEvent::Bitfield);
         //Send interested Req;
-        self.interested_req().await;
+        self.send_interested_req().await;
 
         // announce to the subs
-        if self.available_pieces.len() as u32 == self.total_pieces {
+        if self.available_piece_count as u32 == self.total_pieces {
           self
             .recon
             .announce(TorrentEvent::SeederConnect(self.peer_handle.clone()));
         }
-        return;
       }
 
+      //will not be used
       PeerEvent::CANCEL(_) => {
         // not implemented and not important
         return;
       }
 
+      //done for now
       PeerEvent::PORT(dht_port) => {
         println!("Found a dht port :{dht_port}");
         return;
       }
 
+      //done for now
       PeerEvent::EXTENDED(extended_message_id) => {
         println!("Received a extendedMessageId: {extended_message_id}");
         return;
@@ -365,16 +407,14 @@ impl Peer {
     // mpsc channel push
   }
 
-  pub async fn interested_req(&mut self) {
+  pub async fn send_interested_req(&mut self) {
     // let buf: [u8; 5] = [0x00, 0x00, 0x00, 0x01, 0x02];
     let mut buf = BytesMut::with_capacity(5);
 
     buf.put_u32(1);
     buf.put_u8(2);
 
-    self.state.am_interested = true;
     // mpsc outgoing push
-
     self.outgoing_req.send(buf.freeze()).await.unwrap();
   }
 
@@ -388,7 +428,7 @@ impl Peer {
     self.outgoing_req.send(buf.freeze()).await.unwrap();
   }
 
-  pub async fn have_req(&mut self, piece_id: u32) {
+  pub async fn send_have_req(&mut self, piece_id: u32) {
     let mut have_buf = BytesMut::with_capacity(9);
 
     have_buf.put_u32(5);
@@ -422,7 +462,7 @@ impl Peer {
     // pending_requests.size
   }
 
-  async fn unchoke_req(&mut self) {
+  async fn send_unchoke_req(&mut self) {
     println!("🏖️ UNCHOKE PEER");
     let mut unchoke_buf = BytesMut::with_capacity(5);
 

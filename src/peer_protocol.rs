@@ -7,7 +7,7 @@ pub enum PeerEvent {
   INTERESTED,
   NotInterested,
   HAVE {
-    piece_id: u32,
+    piece_idx: u32,
   },
 
   BITFIELD {
@@ -17,9 +17,9 @@ pub enum PeerEvent {
   REQUEST(BlockRequest),
 
   PIECE {
-    piece_id: u32,
+    piece_idx: u32,
     offset: u32,
-    data: Bytes,
+    block: Bytes,
   },
 
   CANCEL(BlockRequest),
@@ -41,12 +41,4 @@ pub struct PendingReq {
   pub length: u32,
 
   pub sent_at: Instant,
-}
-
-pub enum ManagerMessage {
-  PieceReceived {
-    piece_id: u32,
-    offset: u32,
-    data: Bytes,
-  },
 }

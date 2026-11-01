@@ -3,3 +3,5 @@ pub struct TrackerAnnounceArgs {
   peer_id: [u8; 20],
   port: u16,
 }
+
+pub struct HttpTracker {}

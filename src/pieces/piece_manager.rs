@@ -4,8 +4,8 @@ use bytes::Bytes;
 use tokio::sync::mpsc;
 
 use crate::{
-  event::TorrentEvent, pieces::piece_geometry::PieceGeometry, recon::Recon,
-  storage_manager::StorageManager,
+  event::event::TorrentEvent, peer_protocol::BlockRequest, pieces::piece_geometry::PieceGeometry,
+  recon::Recon, storage_manager::StorageManager,
 };
 
 #[derive(Clone)]
@@ -34,4 +34,21 @@ pub struct PieceManager {
 
   storage: StorageManager,
   recon: Recon<TorrentEvent>,
+}
+
+pub enum PieceManagerMessage {
+  IncomingBlock(Piece),
+  IncomingRequest(IncomingRequest),
+}
+
+#[derive(Clone)]
+pub struct IncomingRequest {
+  pub incoming_request: BlockRequest,
+  pub outgoing_sender: mpsc::Sender<Bytes>,
+}
+
+impl IncomingRequest {
+  pub async fn send_block(self, data: Bytes) {
+    let _ = self.outgoing_sender.send(data).await;
+  }
 }

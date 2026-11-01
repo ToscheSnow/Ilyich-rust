@@ -12,4 +12,6 @@ mod stats;
 mod utils;
 
 #[tokio::main]
-async fn main() {}
+async fn main() {
+  
+}

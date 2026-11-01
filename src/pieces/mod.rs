@@ -1,4 +1,4 @@
-pub mod piece_manager;
+pub mod bitfield;
 mod piece_geometry;
+pub mod piece_manager;
 mod verify_piece;
-mod bitfield;

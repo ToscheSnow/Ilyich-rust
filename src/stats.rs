@@ -1,10 +1,10 @@
-use std::{collections::HashSet};
+use std::{collections::HashSet, time::Duration};
 
 use tokio::{
-  select, sync::{self, mpsc::UnboundedReceiver, watch},
+  select, sync::{mpsc::UnboundedReceiver, watch}, task::JoinHandle,
 };
 
-use crate::{event::TorrentEvent, peers::peer::PeerHandle};
+use crate::{event::event::TorrentEvent, peers::peer::PeerHandle};
 
 pub struct TransferStats {
   downloaded: u64,
@@ -61,8 +61,6 @@ impl Stats {
   pub fn get_stats_receiver(&self) -> watch::Receiver<StatsSnapshot> {
     self.stats_board.clone()
   }
-
-  pub sup
 
   pub fn update_stats_board(&self) {
     // Safely cast lengths to u16 preventing silent overflow wrap-around
@@ -132,14 +130,16 @@ impl Stats {
     }
   }
 
-  pub fn sample(&mut self,interval:Duration) {
+  pub fn sample(&mut self, interval: Duration) {
     let secs = interval.as_secs_f64();
-    if secs <= 0.0 { return; }
-  
+    if secs <= 0.0 {
+      return;
+    }
+
     let delta = self.bytes_downloaded_this_session - self.last_speed_check_bytes;
     let inst = delta as f64 / secs;
     self.last_speed_check_bytes = self.bytes_downloaded_this_session;
-  
+
     self.ema_speed = if self.ema_speed == 0.0 {
       inst
     } else {
@@ -147,12 +147,48 @@ impl Stats {
     };
   }
 
-  pub fn new(total_pieces:u32,total_bytes:u64,recon_receiver:UnboundedReceiver<TorrentEvent>) -> Self {
-    let (stats_board_chalk,stats_board) = tokio::sync::watch::channel(TorrentEvent);
-    Self { peers: HashSet::new(), choked: HashSet::new(), seeders: HashSet::new(), pieces_completed: 0, bytes_downloaded_this_session: 0, total_bytes_have: 0, verified_bytes: 0, uploaded_bytes: 0, last_speed_check_bytes: 0, ema_speed: 0.0, total_pieces, total_bytes, recon_receiver, stats_board_chalk, stats_board }
+  pub fn new(
+    total_pieces: u32,
+    total_bytes: u64,
+    recon_receiver: UnboundedReceiver<TorrentEvent>,
+  ) -> Self {
+    let (stats_board_chalk, stats_board) = tokio::sync::watch::channel(StatsSnapshot {
+      connected_peer_count: 0,
+      choked_count: 0,
+      seeder_count: 0,
+      pieces_completed: 0,
+      bytes_downloaded_this_session: 0,
+      total_bytes_have: 0,
+      verified_bytes: 0,
+      uploaded_bytes: 0,
+      last_speed_check_bytes: 0,
+      left: 0,
+      ema_speed: 0.0,
+      total_pieces,
+      total_bytes,
+      bytes_in_progress: 0,
+    });
+
+    Self {
+      peers: HashSet::new(),
+      choked: HashSet::new(),
+      seeders: HashSet::new(),
+      pieces_completed: 0,
+      bytes_downloaded_this_session: 0,
+      total_bytes_have: 0,
+      verified_bytes: 0,
+      uploaded_bytes: 0,
+      last_speed_check_bytes: 0,
+      ema_speed: 0.0,
+      total_pieces,
+      total_bytes,
+      recon_receiver,
+      stats_board_chalk,
+      stats_board,
+    }
   }
 
-  // starts running 
+  // starts running
   pub fn run(mut self) -> JoinHandle<()> {
     tokio::task::spawn(async { loop {} })
   }

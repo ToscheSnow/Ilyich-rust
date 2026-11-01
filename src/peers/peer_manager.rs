@@ -12,9 +12,7 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 
 use crate::{
-  event::TorrentEvent,
-  peers::peer::{Peer, PeerHandle},
-  recon::Recon,
+  event::event::TorrentEvent, peers::peer::{Peer, PeerHandle}, recon::Recon,
 };
 
 enum PeerMessage {}
