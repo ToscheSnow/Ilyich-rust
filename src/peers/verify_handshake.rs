@@ -7,13 +7,24 @@ pub struct HandshakeRes {
   pub supports_dht: bool,
 }
 
-pub fn verify_handshake(sent: Bytes, received: Bytes) -> HandshakeRes {
+impl Default for HandshakeRes {
+  fn default() -> Self {
+    HandshakeRes {
+      is_successful: false,
+      remote_peer_id: None,
+      supports_extensions: false,
+      supports_dht: false,
+    }
+  }
+}
+
+pub fn verify_handshake(sent: Bytes, received: &[u8]) -> HandshakeRes {
   if received.len() < 68 {
     return HandshakeRes {
       is_successful: false,
       remote_peer_id: None,
-      supports_extensions:false,
-      supports_dht:false
+      supports_extensions: false,
+      supports_dht: false,
     };
   };
 
@@ -30,6 +41,6 @@ pub fn verify_handshake(sent: Bytes, received: Bytes) -> HandshakeRes {
     is_successful,
     remote_peer_id: Some(remote_peer_id),
     supports_extensions,
-    supports_dht
+    supports_dht,
   }
 }

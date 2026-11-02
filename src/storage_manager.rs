@@ -24,6 +24,7 @@ pub struct StorageManager {
   dir_path: PathBuf,
 }
 
+#[derive(Clone)]
 pub struct TorrentMetadata {
   pub info_hash: [u8; 20],
   pub name: String,
@@ -33,13 +34,13 @@ pub struct TorrentMetadata {
   pub layout: FileLayout,
 }
 
-
 #[derive(Debug, Clone)]
 pub struct TorrentFile {
   pub length: u64,
   pub path: Vec<String>,
 }
 
+#[derive(Clone)]
 pub enum FileLayout {
   SingleFileLayout { length: u64 },
   MultiFileLayout { files: Vec<TorrentFile> },
@@ -59,7 +60,7 @@ impl StorageManager {
 
     manager.init_file_paths();
 
-    return manager;
+    manager
   }
 
   fn init_file_paths(&mut self) {

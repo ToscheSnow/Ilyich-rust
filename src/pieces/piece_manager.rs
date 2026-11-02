@@ -96,7 +96,7 @@ impl PieceManager {
     println!("Piece length: {}", format_bytes(piece_length as u64));
     println!("Piece count: {}", format_bytes(total_pieces as u64));
 
-    let (cmd_sender, incoming_cmd) = tokio::sync::mpsc::channel::<PieceManagerMessage>(200);
+    let (cmd_sender, incoming_cmd) = tokio::sync::mpsc::channel::<PieceManagerMessage>(500);
 
     let manager: PieceManager = PieceManager {
       total_length,
@@ -118,8 +118,9 @@ impl PieceManager {
     return (manager, cmd_sender);
   }
 
-  pub fn run(mut self) {
+  pub async fn run(mut self) {
     self.complete_download_handler();
+    self.storage_manager.init_file_handles().await;
     self.spawn();
   }
 
@@ -135,6 +136,7 @@ impl PieceManager {
               incoming_request,
               outgoing_sender,
             }) => {
+              println!("Got a request for a block");
               let Some(block) = self.get_block(&incoming_request).await else {
                 continue;
               };
@@ -269,12 +271,14 @@ impl PieceManager {
       offset,
       block,
     }));
+    // println!("Announced that i have successfully received the block");
 
     if !self.is_complete_piece(piece_idx) {
       return;
     }
 
     let assembled = self.assemble_piece(piece_idx);
+    println!("Assembled the block");
 
     let start = piece_idx as usize * 20;
     let end = start + 20;
@@ -283,6 +287,7 @@ impl PieceManager {
       self.blame_peers(piece_idx);
       self.clear_piece_blocks(piece_idx);
       self.recon.announce(TorrentEvent::PieceFail(piece_idx));
+      println!("Failed block verification");
       return;
     }
 
@@ -290,8 +295,11 @@ impl PieceManager {
     self.settle_suspects(piece_idx, assembled.clone());
 
     let piece_length = assembled.len() as u32;
+    println!("Try to write to disk");
 
     self.storage_manager.write_piece(piece_idx, assembled).await;
+
+    println!("Written to disk");
 
     if !has_piece(&self.verified_pieces, piece_idx as usize) {
       self.downloaded_piece_counter += 1;
@@ -324,9 +332,13 @@ impl PieceManager {
     self.recon.announce(TorrentEvent::DownloadComplete);
   }
 
-  fn settle_suspects(&self, piece_idx: u32, piece_block: Bytes) {}
+  fn settle_suspects(&self, _piece_idx: u32, piece_block: Bytes) {
+    let _ = piece_block;
+  }
 
-  fn blame_peers(&self, piece_idx: u32) {}
+  fn blame_peers(&self, piece_idx: u32) {
+    let _ = piece_idx;
+  }
 
   pub fn record_block(&mut self, piece_idx: u32, offset: u32, peer: PeerHandle) {
     let m = self.senders.entry(piece_idx).or_default();

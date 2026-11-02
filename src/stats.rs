@@ -1,7 +1,8 @@
 use std::{collections::HashSet, time::Duration};
 
 use tokio::{
-  select, sync::{mpsc::UnboundedReceiver, watch}, task::JoinHandle,
+  sync::{mpsc::UnboundedReceiver, watch},
+  task::JoinHandle,
 };
 
 use crate::{event::event::TorrentEvent, peers::peer::PeerHandle};
@@ -196,12 +197,12 @@ impl Stats {
 
 pub fn format_bytes(n: u64) -> String {
   if n < 1024 {
-      format!("{} B", n)
+    format!("{} B", n)
   } else if n < 1024_u64.pow(2) {
-      format!("{:.1} KB", n as f64 / 1024.0)
+    format!("{:.1} KB", n as f64 / 1024.0)
   } else if n < 1024_u64.pow(3) {
-      format!("{:.2} MB", n as f64 / 1024_u64.pow(2) as f64)
+    format!("{:.2} MB", n as f64 / 1024_u64.pow(2) as f64)
   } else {
-      format!("{:.2} GB", n as f64 / 1024_u64.pow(3) as f64)
+    format!("{:.2} GB", n as f64 / 1024_u64.pow(3) as f64)
   }
 }
