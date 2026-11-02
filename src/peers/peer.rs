@@ -68,6 +68,7 @@ pub struct Peer {
   outgoing_req: mpsc::Sender<Bytes>,
 
   incoming_command: mpsc::Receiver<PeerCommand>,
+  command_sender: mpsc::Sender<PeerCommand>,
 
   peer_handle: PeerHandle,
   piece_manager_sender: tokio::sync::mpsc::Sender<PieceManagerMessage>,
@@ -299,7 +300,7 @@ impl Peer {
               offset,
               length,
             },
-            outgoing_sender: self.outgoing_req.clone(),
+            outgoing_sender: self.command_sender.clone(),
           }))
           .await;
       }

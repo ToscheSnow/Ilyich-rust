@@ -1,6 +1,6 @@
-use crate::file_parsing::metadata_types::{TorrentFile, TorrentMetadata};
-use crate::file_parsing::parser_types::{BencodeDict, BencodeVal};
 use crate::file_parsing::info_hash::get_info_hash;
+use crate::file_parsing::parser_types::{BencodeDict, BencodeVal};
+use crate::storage_manager::{FileLayout, TorrentFile, TorrentMetadata};
 
 pub fn get_meta(decoded_torrent: &BencodeDict) -> Result<TorrentMetadata, String> {
   let info = match decoded_torrent.get("info") {
@@ -27,11 +27,14 @@ pub fn get_meta(decoded_torrent: &BencodeDict) -> Result<TorrentMetadata, String
 
   // Single file
   if let Some(BencodeVal::Int(length)) = info.get("length") {
-    return Ok(TorrentMetadata::SingleFile {
+    return Ok(TorrentMetadata {
       name,
-      piece_length,
+      piece_length: piece_length as u32,
       piece_hashes,
-      length: *length,
+      layout: FileLayout::SingleFileLayout {
+        length: *length as u64,
+      },
+      private: None,
       info_hash,
     });
   }
@@ -53,7 +56,7 @@ pub fn get_meta(decoded_torrent: &BencodeDict) -> Result<TorrentMetadata, String
     let length = match file_dict.get("length") {
       Some(BencodeVal::Int(value)) => *value,
       _ => return Err("Missing or invalid file length".into()),
-    };
+    } as u64;
 
     let raw_path = match file_dict.get("path") {
       Some(BencodeVal::List(path)) => path,
@@ -74,11 +77,12 @@ pub fn get_meta(decoded_torrent: &BencodeDict) -> Result<TorrentMetadata, String
     files.push(TorrentFile { length, path });
   }
 
-  Ok(TorrentMetadata::MultiFile {
-    info_hash,
+  Ok(TorrentMetadata {
+    info_hash: info_hash.into(),
     name,
-    piece_length,
+    piece_length: piece_length as u32,
     piece_hashes,
-    files,
+    layout: FileLayout::MultiFileLayout { files },
+    private: None,
   })
 }

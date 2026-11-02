@@ -1,13 +1,14 @@
 use crate::file_parsing::parser_types::{BencodeDict, BencodeVal};
+use bytes::Bytes;
 
 pub enum ASCII {
   ZERO = 0x30,
   NINE = 0x39,
   COLON = 0x3a,
-  L = 0x6c,
-  E = 0x65,
-  D = 0x64,
-  I = 0x69,
+  L = 0x6c, // maps to lowercase 'l'
+  E = 0x65, // maps to lowercase 'e'
+  D = 0x64, // maps to lowercase 'd'
+  I = 0x69, // maps to lowercase 'i'
   HP = 0x2d,
 }
 
@@ -21,7 +22,7 @@ impl BencodeDecoder {
     Self { buf, pos: 0 }
   }
 
-  // Check if any remaining bytes
+  // check if any remaining bytes
   fn done(&self) -> bool {
     self.pos >= self.buf.len()
   }
@@ -30,7 +31,6 @@ impl BencodeDecoder {
     if self.done() {
       return Err("unexpected EOF".into());
     }
-
     Ok(self.buf[self.pos])
   }
 
@@ -40,38 +40,33 @@ impl BencodeDecoder {
     Ok(b)
   }
 
-  fn take(&mut self, n: usize) -> Result<Vec<u8>, String> {
+  fn take(&mut self, n: usize) -> Result<Bytes, String> {
     let end = self.pos.checked_add(n).ok_or("unexpected EOF")?;
-
     if end > self.buf.len() {
       return Err("unexpected EOF".into());
     }
 
-    let bytes = self.buf[self.pos..end].to_vec();
+    // Mirrors TS `subarray` but creates an efficient referenced `Bytes` slice
+    let bytes = Bytes::copy_from_slice(&self.buf[self.pos..end]);
+    self.pos = end;
 
-    // Move the pointer ahead here
-    self.pos += n;
-
-    // Returns the actual bytes
     Ok(bytes)
   }
 
-  // Check required bytes at a location
+  // check required bytes at a location throws Error otherwise
   fn expect(&mut self, byte: u8) -> Result<(), String> {
     if self.next()? != byte {
       return Err(format!("expected {:x}", byte));
     }
-
     Ok(())
   }
 
-  // Consume if what you needed, else skip
+  // consume if what you needed else skip
   fn match_byte(&mut self, byte: u8) -> bool {
     if !self.done() && self.buf[self.pos] == byte {
       self.pos += 1;
       return true;
     }
-
     false
   }
 
@@ -79,7 +74,7 @@ impl BencodeDecoder {
     byte <= ASCII::NINE as u8 && byte >= ASCII::ZERO as u8
   }
 
-  // Integer i<base10>e
+  // integer i<base10>e
   fn parse_integer(&mut self) -> Result<i64, String> {
     let mut num: i64 = 0;
     let mut sign: i64 = 1;
@@ -90,30 +85,30 @@ impl BencodeDecoder {
 
     self.next()?;
 
-    // Handle negative sign
+    // handle negative sign
     if self.match_byte(ASCII::HP as u8) {
       if self.peek()? == ASCII::ZERO as u8 || !Self::is_digit(self.peek()?) {
         return Err("Invalid integer".into());
       }
-
       sign = -1;
     }
 
-    // Handle leading 0s
+    // handle leading 0s
     if self.match_byte(ASCII::ZERO as u8) {
       self.expect(ASCII::E as u8)?;
       return Ok(0);
     }
 
-    // Get number in base 10
+    // get number in base 10
     while !self.done() && Self::is_digit(self.peek()?) {
+      let next_byte = self.next()?;
       num = num
         .checked_mul(10)
-        .and_then(|n| n.checked_add((self.next().ok()? - ASCII::ZERO as u8) as i64))
+        .and_then(|n| n.checked_add((next_byte - ASCII::ZERO as u8) as i64))
         .ok_or("Integer overflow")?;
     }
 
-    // Integer termination symbol e
+    // integer termination symbol e
     self.expect(ASCII::E as u8)?;
 
     num
@@ -121,28 +116,27 @@ impl BencodeDecoder {
       .ok_or_else(|| "Integer overflow".into())
   }
 
-  // Byte strings lengthInBytes:bytes
-  fn parse_byte_string(&mut self) -> Result<Vec<u8>, String> {
+  // byte Strings lengthInBytes:bytes
+  fn parse_byte_string(&mut self) -> Result<Bytes, String> {
     if !Self::is_digit(self.peek()?) {
       return Err("Invalid call to byte string parser".into());
     }
 
     let mut len: usize = 0;
 
-    // Count bytes to be consumed
+    // count bytes to be consumed
     while !self.done() && Self::is_digit(self.peek()?) {
+      let next_byte = self.next()?;
       len = len
         .checked_mul(10)
-        .and_then(|n| n.checked_add((self.next().ok()? - ASCII::ZERO as u8) as usize))
+        .and_then(|n| n.checked_add((next_byte - ASCII::ZERO as u8) as usize))
         .ok_or("Invalid byte string length")?;
     }
 
     self.expect(ASCII::COLON as u8)?;
 
-    // Consume len bytes from the buffer
-    let bytes = self.take(len)?;
-
-    Ok(bytes)
+    // consume len bytes from the buffer
+    self.take(len)
   }
 
   fn parse_list(&mut self) -> Result<Vec<BencodeVal>, String> {
@@ -154,20 +148,19 @@ impl BencodeDecoder {
 
     let mut res_list: Vec<BencodeVal> = Vec::new();
 
-    // Parse items recursively
+    // parse items recursively
     while !self.done() && self.peek()? != ASCII::E as u8 {
       let item = self.parse_value()?;
       res_list.push(item);
     }
 
     self.expect(ASCII::E as u8)?;
-
     Ok(res_list)
   }
 
-  // Dict d<pairs>e
+  // dict d<pairs>e
   fn parse_dict(&mut self) -> Result<BencodeDict, String> {
-    // Function to ensure sorted keys in actual byte order
+    // function to ensure sorted keys in actual byte order irrespective of text encoding
     fn compare_bytes(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
       a.cmp(b)
     }
@@ -176,57 +169,51 @@ impl BencodeDecoder {
       return Err("Invalid call to dict parser".into());
     }
 
-    let mut last_key_bytes: Option<Vec<u8>> = None;
+    let mut last_key_bytes: Option<Bytes> = None;
 
-    // Consume byte representing d
+    // consume byte representing d
     self.next()?;
 
-    let mut res: BencodeDict = BencodeDict::new();
+    let mut res = BencodeDict::new();
 
     while !self.done() && self.peek()? != ASCII::E as u8 {
-      // Check sorted
+      // check sorted
       let key_bytes = self.parse_byte_string()?;
-
       if let Some(last) = &last_key_bytes {
         if compare_bytes(last, &key_bytes) != std::cmp::Ordering::Less {
           return Err("Unsorted key in dict".into());
         }
       }
 
-      let key = String::from_utf8(key_bytes.clone()).map_err(|_| "Invalid UTF-8 dictionary key")?;
-
+      // Translates TS: this.decoder.decode(keyBytes)
+      let key =
+        String::from_utf8(key_bytes.to_vec()).map_err(|_| "Invalid UTF-8 dictionary key")?;
       last_key_bytes = Some(key_bytes);
 
-      let value = self.parse_value()?;
-
-      res.insert(key, value);
+      let val = self.parse_value()?;
+      res.insert(key, val);
     }
 
     self.expect(ASCII::E as u8)?;
-
     Ok(res)
   }
 
-  // Choose functions to execute recursively
+  // choose functions to execute recursively for nested structures
   fn parse_value(&mut self) -> Result<BencodeVal, String> {
     if self.done() {
       return Err("unexpected EOF".into());
     }
-
     let c = self.peek()?;
 
     if c == ASCII::I as u8 {
       return Ok(BencodeVal::Int(self.parse_integer()?));
     }
-
     if c == ASCII::L as u8 {
       return Ok(BencodeVal::List(self.parse_list()?));
     }
-
     if c == ASCII::D as u8 {
       return Ok(BencodeVal::Dict(self.parse_dict()?));
     }
-
     if Self::is_digit(c) {
       return Ok(BencodeVal::Bytes(self.parse_byte_string()?));
     }
@@ -234,14 +221,12 @@ impl BencodeDecoder {
     Err(format!("Unexpected byte: 0x{:x} at pos {}", c, self.pos))
   }
 
-  // General parsing function for torrent files
+  // general parsing function for torrent files
   pub fn parse(&mut self) -> Result<BencodeVal, String> {
     let val = self.parse_value()?;
-
     if !self.done() {
       return Err(format!("Trailing data at pos {}", self.pos));
     }
-
-    Ok(val)
+    return Ok(val);
   }
 }

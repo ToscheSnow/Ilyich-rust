@@ -2,7 +2,7 @@ use crate::file_parsing::encoder::BencodeEncoder;
 use crate::file_parsing::parser_types::BencodeDict;
 use sha1::{Digest, Sha1};
 
-pub fn get_info_hash(decoded_torrent: &BencodeDict) -> Result<Vec<u8>, String> {
+pub fn get_info_hash(decoded_torrent: &BencodeDict) -> Result<[u8;20], String> {
   // Encoder to encode info dict
   let encoder = BencodeEncoder::new();
 
@@ -16,5 +16,5 @@ pub fn get_info_hash(decoded_torrent: &BencodeDict) -> Result<Vec<u8>, String> {
   let info_hash = Sha1::digest(&encoded);
 
   // Return as a byte vector, process at call site
-  Ok(info_hash.to_vec())
+  Ok(info_hash.into())
 }

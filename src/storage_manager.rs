@@ -25,23 +25,24 @@ pub struct StorageManager {
 }
 
 pub struct TorrentMetadata {
-  info_hash: [u8; 20],
-  name: String,
-  piece_length: u32,
-  piece_hashes: Vec<[u8; 20]>,
-  private: Option<u8>,
-  layout: FileLayout,
+  pub info_hash: [u8; 20],
+  pub name: String,
+  pub piece_length: u32,
+  pub piece_hashes: Bytes,
+  pub private: Option<u8>,
+  pub layout: FileLayout,
 }
 
+
+#[derive(Debug, Clone)]
 pub struct TorrentFile {
-  length: u64,
-  path: Vec<String>,
+  pub length: u64,
+  pub path: Vec<String>,
 }
 
-enum FileLayout {
+pub enum FileLayout {
   SingleFileLayout { length: u64 },
-
-  MultiFileInfo { files: Vec<TorrentFile> },
+  MultiFileLayout { files: Vec<TorrentFile> },
 }
 
 impl StorageManager {
@@ -73,7 +74,7 @@ impl StorageManager {
         });
       }
 
-      FileLayout::MultiFileInfo { files } => {
+      FileLayout::MultiFileLayout { files } => {
         //last_end == curr_start
         let mut last_end = 0;
 

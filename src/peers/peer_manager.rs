@@ -1,174 +1,145 @@
 use std::{
   collections::HashSet,
+  net::SocketAddr,
   sync::{Arc, RwLock},
   time::Duration,
 };
 
 use bytes::{Bytes, BytesMut};
-use tokio::{io::AsyncWriteExt, net::TcpStream, task::JoinSet, time::timeout};
+use tokio::{
+  io::AsyncWriteExt,
+  net::TcpStream,
+  select,
+  sync::mpsc::{Receiver, UnboundedReceiver},
+  task::{JoinHandle, JoinSet},
+  time::timeout,
+};
 
 use tokio::io::AsyncReadExt;
 
 use tokio::sync::mpsc;
 
 use crate::{
-  event::event::TorrentEvent, peers::peer::{Peer, PeerHandle}, recon::Recon,
+  event::event::TorrentEvent,
+  peers::{
+    client::CLIENT_ID_BYTES,
+    handshake_buf::{self, handshake_buf},
+    peer::{self, Peer, PeerHandle},
+    peer_manager::{self, PeerManagerMessage::AttemptConnection},
+  },
+  recon::Recon,
 };
 
-enum PeerMessage {}
-
-enum PeerStatus {
-  Connected(String),
-  Disconnected(String),
+pub enum PeerManagerMessage {
+  AttemptConnection(Vec<SocketAddr>),
+  ConnectionSuccessful(SocketAddr, PeerHandle),
+  ConnectionFailed(SocketAddr),
 }
 
 pub struct PeerManager {
-  connecting_peers: HashSet<String>,
+  connecting_peers: HashSet<SocketAddr>,
   active_peers: Arc<RwLock<HashSet<PeerHandle>>>,
   info_hash: Bytes,
 
+  message_receiver: mpsc::Receiver<PeerManagerMessage>,
+  message_sender: mpsc::Sender<PeerManagerMessage>,
+
   recon_listener: mpsc::UnboundedReceiver<TorrentEvent>,
   recon: Recon<TorrentEvent>,
-
-  peer_message_sender: mpsc::Sender<PeerMessage>,
-  peer_message_receiver: mpsc::Receiver<PeerMessage>,
 }
 
 impl PeerManager {
-  fn add_addresses(&mut self, new_peer_addresses: Vec<String>) {
-    for address in &new_peer_addresses {
-      //trigger connect to new peers;
-      if self.connecting_peers.contains(address) {
-        continue;
-      }
-
-      self.connecting_peers.insert(address.clone());
-      let peer_address = address.clone();
-
-      let peer_status_transmitter = self.peer_status_sender.clone();
-
-      let info_hash = self.info_hash.clone();
-
-      let peer_recon = self.recon.clone();
-
-      let _ = self.connections(async move {
-        connect_peer(
-          peer_recon,
+  fn connect_peers(&mut self, peers: Vec<SocketAddr>) {
+    for peer_address in peers {
+      if !self.connecting_peers.contains(&peer_address) {
+        Self::connect_peer(
           peer_address,
-          peer_status_transmitter,
-          info_hash,
-          CLIENT_ID_BYTES,
-        )
-        .await;
-      });
+          self.info_hash.clone(),
+          self.message_sender.clone(),
+        );
+      }
     }
   }
 
-  pub fn new(
+  fn connect_peer(
+    peer_address: SocketAddr,
+    info_hash: Bytes,
+    reply_sender: tokio::sync::mpsc::Sender<PeerManagerMessage>,
+  ) -> JoinHandle<()> {
+    tokio::spawn(async move {
+      let handshake_buf = handshake_buf(info_hash.into(), CLIENT_ID_BYTES);
+    })
+  }
+
+  fn start_listening(&mut self) {}
+
+  fn run(mut self) {
+    self.start_listening();
+    Self::spawn(self);
+  }
+
+  fn new(
     active_peers: Arc<RwLock<HashSet<PeerHandle>>>,
     info_hash: Bytes,
     recon: Recon<TorrentEvent>,
-    recon_listener: mpsc::UnboundedReceiver<TorrentEvent>,
-  ) -> Self {
-    let (peer_message_sender, peer_message_receiver) = mpsc::channel(1000);
+    recon_listener: UnboundedReceiver<TorrentEvent>,
+  ) -> (Self, tokio::sync::mpsc::Sender<PeerManagerMessage>) {
+    let (message_sender, message_receiver) = tokio::sync::mpsc::channel::<PeerManagerMessage>(200);
 
-    let manager = PeerManager {
-      active_peers,
+    let manager: PeerManager = PeerManager {
       connecting_peers: HashSet::new(),
+      active_peers,
       info_hash,
-
+      message_receiver,
+      message_sender: message_sender.clone(),
       recon_listener,
       recon,
-
-      peer_message_sender,
-      peer_message_receiver,
-
-      connections: JoinSet::new(),
     };
 
-    return manager;
+    return (manager, message_sender);
   }
 
-  pub async fn start(&mut self) {
-    loop {
-      tokio::select! {
-          Some(torrent_event) = self.recon_listener.recv() => {
-            // process torrent event
-          }
+  fn spawn(mut self) -> JoinHandle<()> {
+    tokio::spawn(async move {
+      loop {
+        select! {
+          res = self.recon_listener.recv() => {
+            match res {
+              Some(msg) => match msg {
+                TorrentEvent::Ban(peer) => {}
+                TorrentEvent::DownloadComplete => return,
+                TorrentEvent::Disconnect(peer) => {
+                  let mut lock = self.active_peers.write().unwrap();
+                  lock.remove(&peer);
+                }
+                _ => {}
+              },
+              None => break,
+            }
+          },
 
-          Some(peer_event) = self.peer_message_receiver.recv() => {
-            // process peer event
+          res= self.message_receiver.recv()=> {
+            match res {
+              Some(res) => match res {
+                PeerManagerMessage::AttemptConnection(peers) => {
+                  self.connect_peers(peers);
+                }
+                PeerManagerMessage::ConnectionFailed(addr) => {
+                  self.connecting_peers.remove(&addr);
+                }
+                PeerManagerMessage::ConnectionSuccessful(addr, peer) => {
+                  self.connecting_peers.remove(&addr);
+                  {
+                    let mut lock = self.active_peers.write().unwrap();
+                    lock.insert(peer);
+                  }
+                }
+              },
+              None => break,
+            }
           }
-
-          Some(result) = self.connections.join_next() => {
-
-          }
+        }
       }
-    }
+    })
   }
-}
-
-async fn connect_peer(
-  recon: Recon<TorrentEvent>,
-  peer_address: String,
-  transmitter: mpsc::UnboundedSender<PeerStatus>,
-  info_hash: Bytes,
-  CLIENT_ID: &'static [u8],
-) {
-  let torrent_handshake = handshake_buf(info_hash, Bytes::from(CLIENT_ID));
-
-  let attempt = timeout(
-    Duration::from_secs(10),
-    dial(&peer_address, torrent_handshake.clone()),
-  )
-  .await;
-
-  let Ok(Some((stream, buf, received_handshake))) = attempt else {
-    // println!("");
-    return;
-  };
-
-  let HandshakeRes {
-    is_successful,
-    remote_peer_id,
-  } = verify_handshake(torrent_handshake, received_handshake);
-
-  if !is_successful {
-    return;
-  }
-
-  if transmitter
-    .send(PeerStatus::Connected(peer_address))
-    .is_err()
-  {
-    return;
-  }
-
-  let peer = Peer::new(recon, stream, piece_manager_sender, buf);
-}
-
-async fn dial(
-  peer_address: &str,
-  torrent_handshake: Bytes,
-) -> Option<(TcpStream, BytesMut, Bytes)> {
-  let mut stream = TcpStream::connect(peer_address).await.ok()?;
-
-  println!("Connected to {peer_address}");
-
-  stream.write_all(&torrent_handshake).await.ok()?;
-
-  let mut buf = BytesMut::new();
-
-  while buf.len() < 68 {
-    let mut temp = [0u8; 4096];
-    let n = match stream.read(&mut temp).await {
-      Ok(0) | Err(_) => return None, // closed or failed
-      Ok(n) => n,
-    };
-    buf.extend_from_slice(&temp[..n]);
-  }
-
-  let received_handshake = buf.split_to(68).freeze();
-
-  Some((stream, buf, received_handshake))
 }
