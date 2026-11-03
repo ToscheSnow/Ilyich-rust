@@ -44,6 +44,7 @@ pub enum PieceState {
 }
 
 const CONCURRENT_READS: u8 = 32;
+const limit:u32 = 2;
 
 pub struct PieceManager {
   total_length: u64,
