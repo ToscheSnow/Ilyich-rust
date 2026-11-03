@@ -120,8 +120,8 @@ impl Peer {
       addr,
     }: PeerDeps,
   ) -> Self {
-    let (from_socket_tx, from_socket) = mpsc::channel::<Bytes>(2560); // A: reader -> peer
-    let (to_socket, to_socket_rx) = mpsc::channel::<Bytes>(2560); // B: peer -> writer
+    let (from_socket_tx, from_socket) = mpsc::channel::<Bytes>(1000); // A: reader -> peer
+    let (to_socket, to_socket_rx) = mpsc::channel::<Bytes>(1000); // B: peer -> writer
 
     let (cmd_sender, cmd_receiver) = mpsc::channel::<PeerCommand>(1000);
 
@@ -193,7 +193,7 @@ impl Peer {
 
   fn start_incoming_reader(mut reader: OwnedReadHalf, from_socket_tx: mpsc::Sender<Bytes>) {
     tokio::spawn(async move {
-      let mut buf = BytesMut::with_capacity(64 * 1024);
+      let mut buf = BytesMut::with_capacity(128 * 1024);
       loop {
         match reader.read_buf(&mut buf).await {
           Ok(0) | Err(_) => {

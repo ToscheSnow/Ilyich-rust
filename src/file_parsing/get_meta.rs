@@ -1,6 +1,6 @@
 use crate::file_parsing::info_hash::get_info_hash;
 use crate::file_parsing::parser_types::{BencodeDict, BencodeVal};
-use crate::storage_manager::{FileLayout, TorrentFile, TorrentMetadata};
+use crate::file_worker::{FileLayout, TorrentFile, TorrentMetadata};
 
 pub fn get_meta(decoded_torrent: &BencodeDict) -> Result<TorrentMetadata, String> {
   let info = match decoded_torrent.get("info") {

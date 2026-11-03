@@ -1,12 +1,13 @@
+mod StorageManager;
 mod event;
 mod file_parsing;
+mod file_worker;
 mod peer_protocol;
 mod peers;
 mod pieces;
 mod recon;
 mod scheduler;
 mod stats;
-mod storage_manager;
 mod torrent;
 mod trackers;
 mod ui;

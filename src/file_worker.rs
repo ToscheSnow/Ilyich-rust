@@ -1,14 +1,7 @@
-use std::{
-  collections::HashMap,
-  io::{ErrorKind::NotFound, SeekFrom},
-  path::PathBuf,
-};
+use std::{collections::HashMap, io::ErrorKind::NotFound, path::PathBuf, sync::Arc};
 
 use bytes::{Bytes, BytesMut};
-use tokio::{
-  fs::{File, OpenOptions},
-  io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
-};
+use std::fs::OpenOptions;
 
 pub struct DiskFile {
   start_offset: u64,
@@ -16,10 +9,10 @@ pub struct DiskFile {
   path: PathBuf,
 }
 
-pub struct StorageManager {
+pub struct FileWorker {
   files: Vec<DiskFile>,
   piece_length: u32,
-  file_handles: HashMap<PathBuf, File>,
+  file_handles: HashMap<PathBuf, Arc<std::fs::File>>,
   meta: TorrentMetadata,
   dir_path: PathBuf,
 }
@@ -46,7 +39,7 @@ pub enum FileLayout {
   MultiFileLayout { files: Vec<TorrentFile> },
 }
 
-impl StorageManager {
+impl FileWorker {
   pub fn new(meta: TorrentMetadata, dir_path: PathBuf) -> Self {
     let piece_length = meta.piece_length;
 
@@ -111,7 +104,7 @@ impl StorageManager {
 
       tokio::fs::create_dir_all(parent_dir).await?;
 
-      let file_handle = match OpenOptions::new().read(true).write(true).open(path).await {
+      let file_handle = match OpenOptions::new().read(true).write(true).open(path) {
         // file exists
         Ok(file) => file,
 
@@ -121,10 +114,9 @@ impl StorageManager {
             .read(true)
             .write(true)
             .create(true)
-            .open(path)
-            .await?;
+            .open(path)?;
 
-          file.set_len(*length).await?;
+          file.set_len(*length)?;
           file
         }
 
@@ -132,17 +124,15 @@ impl StorageManager {
         Err(err) => return Err(err),
       };
 
-      self.file_handles.insert(path.clone(), file_handle);
+      self
+        .file_handles
+        .insert(path.clone(), Arc::new(file_handle));
     }
 
     Ok(())
   }
 
-  pub async fn write_piece(
-    &mut self,
-    piece_idx: u32,
-    piece_buf: Bytes,
-  ) -> Result<(), std::io::Error> {
+  pub fn write_piece(&self, piece_idx: u32, piece_buf: Bytes) -> Result<(), std::io::Error> {
     let piece_offset: u64 = self.piece_length as u64 * piece_idx as u64;
     let piece_end: u64 = piece_offset + piece_buf.len() as u64;
     for DiskFile {
@@ -161,7 +151,7 @@ impl StorageManager {
 
       let file_handle = self
         .file_handles
-        .get_mut(file_path)
+        .get(file_path)
         .expect("Files are opened before io");
 
       let (start, end) = interval_intersection(
@@ -176,22 +166,16 @@ impl StorageManager {
       let bytes_to_write = (end - start) as usize;
 
       // file_handle.write
-      file_handle.seek(SeekFrom::Start(file_offset)).await?;
-      file_handle
-        .write_all(&piece_buf[buffer_offset..buffer_offset + bytes_to_write])
-        .await?;
-
-      file_handle.flush().await?;
+      write_all(
+        file_handle,
+        &piece_buf[buffer_offset..buffer_offset + bytes_to_write],
+        file_offset,
+      )?;
     }
     return Ok(());
   }
 
-  pub async fn read_block(
-    &mut self,
-    piece_idx: u32,
-    offset: u32,
-    len: u32,
-  ) -> Result<Bytes, std::io::Error> {
+  pub fn read_block(&self, piece_idx: u32, offset: u32, len: u32) -> Result<Bytes, std::io::Error> {
     // piece
     // 100 250
 
@@ -232,16 +216,14 @@ impl StorageManager {
 
       let file_handle = self
         .file_handles
-        .get_mut(file_path)
+        .get(file_path)
         .expect("Files are opened before io");
 
-      file_handle
-        .seek(SeekFrom::Start(start - file_offset))
-        .await?;
-
-      file_handle
-        .read_exact(&mut buf[buf_offset..buf_end])
-        .await?;
+      read_exact(
+        file_handle,
+        &mut buf[buf_offset..buf_end],
+        start - *file_offset,
+      )?;
     }
 
     return Ok(buf.freeze());
@@ -255,4 +237,58 @@ pub fn interval_intersection(
   file_end: u64,
 ) -> (u64, u64) {
   return (file_start.max(piece_start), file_end.min(piece_end));
+}
+
+#[cfg(unix)]
+fn write_at(file: &std::fs::File, buf: &[u8], offset: u64) -> std::io::Result<usize> {
+  use std::os::unix::fs::FileExt;
+  file.write_at(buf, offset)
+}
+
+#[cfg(windows)]
+fn write_at(file: &std::fs::File, buf: &[u8], offset: u64) -> std::io::Result<usize> {
+  use std::os::windows::fs::FileExt;
+  file.seek_write(buf, offset)
+}
+
+#[cfg(unix)]
+fn read_at(file: &std::fs::File, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
+  use std::os::unix::fs::FileExt;
+  file.read_at(buf, offset)
+}
+
+#[cfg(windows)]
+fn read_at(file: &std::fs::File, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
+  use std::os::windows::fs::FileExt;
+  file.seek_read(buf, offset)
+}
+
+fn write_all(file: &std::fs::File, mut data: &[u8], mut offset: u64) -> std::io::Result<()> {
+  while !data.is_empty() {
+    let written_bytes = write_at(file, data, offset)?;
+
+    if written_bytes == 0 {
+      return Err(std::io::ErrorKind::WriteZero.into());
+    }
+
+    offset += written_bytes as u64;
+    data = &data[written_bytes..];
+  }
+
+  Ok(())
+}
+
+fn read_exact(file: &std::fs::File, mut buf: &mut [u8], mut offset: u64) -> std::io::Result<()> {
+  while !buf.is_empty() {
+    let read = read_at(file, buf, offset)?;
+
+    if read == 0 {
+      return Err(std::io::ErrorKind::UnexpectedEof.into());
+    }
+
+    offset += read as u64;
+    buf = &mut buf[read..];
+  }
+
+  Ok(())
 }

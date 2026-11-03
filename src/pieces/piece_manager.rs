@@ -2,13 +2,18 @@ use std::{collections::HashMap, vec};
 
 use bytes::{Bytes, BytesMut};
 use tokio::{
-  io::Join,
   sync::mpsc::{self, Sender},
   task::JoinHandle,
 };
 
+use crate::StorageManager::StorageResult;
+
 use crate::{
   event::event::TorrentEvent::{self},
+  file_worker::{
+    FileLayout::{MultiFileLayout, SingleFileLayout},
+    FileWorker, TorrentMetadata,
+  },
   peer_protocol::BlockRequest,
   peers::{
     client::BLOCK_SIZE,
@@ -21,10 +26,6 @@ use crate::{
   },
   recon::Recon,
   stats::format_bytes,
-  storage_manager::{
-    FileLayout::{MultiFileLayout, SingleFileLayout},
-    StorageManager, TorrentMetadata,
-  },
 };
 
 #[derive(Clone)]
@@ -32,6 +33,14 @@ pub struct Piece {
   pub piece_idx: u32,
   pub offset: u32,
   pub block: Bytes,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PieceState {
+  Verified,
+  Downloading,
+  Verifying,
+  Writing,
 }
 
 const CONCURRENT_READS: u8 = 32;
@@ -50,16 +59,20 @@ pub struct PieceManager {
   verified_pieces: Vec<u8>,
   blocks: HashMap<(u32, u32), Bytes>,
 
-  storage_manager: StorageManager,
+  storage_manager: FileWorker,
   recon: Recon<TorrentEvent>,
   senders: HashMap<u32, HashMap<u64, PeerHandle>>,
 
   fail_streak: u32,
+
+  states: Vec<PieceState>,
 }
 
 pub enum PieceManagerMessage {
   IncomingBlock(Piece),
   IncomingRequest(IncomingRequest),
+  StorageReply(StorageResult),
+  ValidatorReply { piece_idx: u32, success: bool },
 }
 
 #[derive(Clone)]
@@ -77,7 +90,7 @@ impl IncomingRequest {
 impl PieceManager {
   pub fn new(
     meta: TorrentMetadata,
-    storage_manager: StorageManager,
+    storage_manager: FileWorker,
     recon: Recon<TorrentEvent>,
   ) -> (Self, Sender<PieceManagerMessage>) {
     let TorrentMetadata {
@@ -116,6 +129,7 @@ impl PieceManager {
       recon,
       senders: HashMap::new(),
       fail_streak: 0,
+      states: vec![PieceState::Downloading; total_pieces as usize],
     };
 
     return (manager, cmd_sender);

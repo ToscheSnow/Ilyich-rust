@@ -141,26 +141,28 @@ impl UdpTracker {
     tracker
   }
 
-  pub async fn run(mut self) {
-    println!("Inside udp run");
-    let socket = Arc::new(
-      UdpSocket::bind("0.0.0.0:0")
-        .await
-        .expect("couldn't make udp socket"),
-    );
-    let socket_rx = self.socket_rx.take().expect("run called twice");
+  pub fn run(mut self) -> JoinHandle<()> {
+    tokio::spawn(async move {
+      println!("Inside udp run");
+      let socket = Arc::new(
+        UdpSocket::bind("0.0.0.0:0")
+          .await
+          .expect("couldn't make udp socket"),
+      );
+      let socket_rx = self.socket_rx.take().expect("run called twice");
 
-    Self::reader(Arc::clone(&socket), self.event_tx.clone());
-    Self::writer(socket, socket_rx);
+      Self::reader(Arc::clone(&socket), self.event_tx.clone());
+      Self::writer(socket, socket_rx);
 
-    let mut ticker = tokio::time::interval(Duration::from_secs(60)); // first tick is immediate
+      let mut ticker = tokio::time::interval(Duration::from_secs(60)); // first tick is immediate
 
-    loop {
-      tokio::select! {
-        _ = ticker.tick() => self.announce_all(),
-        Some(event) = self.event_rx.recv() => self.reducer(event).await,
+      loop {
+        tokio::select! {
+          _ = ticker.tick() => self.announce_all(),
+          Some(event) = self.event_rx.recv() => self.reducer(event).await,
+        }
       }
-    }
+    })
   }
 
   fn announce_all(&self) {
@@ -425,7 +427,12 @@ impl UdpTracker {
       loop {
         match socket_rx.recv().await {
           Some(resp) => {
-            socket_writer.send_to(&resp.message, resp.to).await.unwrap();
+            //  Safe: Logs the error and allows the worker thread to keep running
+            if let Err(e) = socket_writer.send_to(&resp.message, resp.to).await {
+              // eprintln!("Failed to send UDP packet: {}", e);
+              // Or return the error if inside a function that returns a Result:
+              // return Err(e.into());
+            }
           }
           None => break,
         }

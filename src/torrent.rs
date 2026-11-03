@@ -18,9 +18,9 @@ use crate::{
   pieces::piece_manager::PieceManager,
   scheduler::Scheduler,
   stats::Stats,
-  storage_manager::{
+  file_worker::{
     FileLayout::{MultiFileLayout, SingleFileLayout},
-    StorageManager, TorrentMetadata,
+    FileWorker, TorrentMetadata,
   },
   trackers::{
     self, extract_url::extract_tracker_urls, http_tracker::TrackerAnnounceArgs,
@@ -78,7 +78,7 @@ impl Torrent {
     let recon_clone = recon.clone();
     let meta_clone = meta.clone();
 
-    let storage_manager = StorageManager::new(meta_clone, PathBuf::from(download_dir));
+    let storage_manager = FileWorker::new(meta_clone, PathBuf::from(download_dir));
     let active_peers = Arc::new(RwLock::new(HashSet::new()));
 
     let (piece_manager, piece_manager_sender) =
@@ -132,32 +132,13 @@ impl Torrent {
   pub async fn run(self) {
     let ui = start_stats_ui(self.stats.get_stats_receiver());
     self.stats.run();
-    self.scheduler.run();
     self.piece_manager.run().await;
     self.peer_manager.run();
-    self.udp_tracker.run().await;
-    
+    self.scheduler.run();
+    self.udp_tracker.run();
+
     let _ = ui.await;
     // let peers = Vec::new();
-    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(40));
-
-    loop {
-      select! {
-          // Fires every time the interval ticks
-          _ = interval.tick() => {
-              // println!("1 second tick passed - managing torrent states...");
-          }
-
-          // Example: If you need to handle incoming messages from a receiver channel here
-          /*
-          Some(event) = self.some_receiver.recv() => {
-              match event {
-                   TorrentEvent::Quit => break,
-              }
-          }
-          */
-      }
-    }
   }
 
   // fn get_total_bytes(&self) -> u64 {}

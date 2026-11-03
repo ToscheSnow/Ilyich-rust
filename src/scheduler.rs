@@ -21,7 +21,7 @@ use crate::{
   pieces::{bitfield::has_piece, piece_geometry::PieceGeometry},
 };
 
-const MAX_INFLIGHT_PER_PEER: usize = 16;
+const MAX_INFLIGHT_PER_PEER: usize = 160;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub struct Scheduler {
@@ -48,7 +48,7 @@ impl Scheduler {
     piece_length: u32,
   ) -> Self {
     Self {
-      max_active_pieces: 8,
+      max_active_pieces: 80,
       pieces_in_slot: HashSet::new(),
       active_peers,
       unchoked: HashSet::new(),
@@ -104,6 +104,10 @@ impl Scheduler {
       TorrentEvent::PieceFail(piece_idx) => {
         // stays in the slot, so its blocks simply get requested again
         self.forget_piece(piece_idx);
+      }
+
+      TorrentEvent::Exists(idx, _len) => {
+        self.verified_pieces.insert(idx);
       }
       _ => {}
     }
