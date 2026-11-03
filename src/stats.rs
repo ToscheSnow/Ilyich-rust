@@ -1,37 +1,41 @@
 use std::{collections::HashSet, time::Duration};
 
 use tokio::{
+  select,
   sync::{mpsc::UnboundedReceiver, watch},
   task::JoinHandle,
+  time::interval,
 };
 
 use crate::{event::event::TorrentEvent, peers::peer::PeerHandle};
 
+#[derive(Clone)]
 pub struct TransferStats {
-  downloaded: u64,
-  uploaded: u64,
-  left: u64,
+  pub downloaded: u64,
+  pub uploaded: u64,
+  pub left: u64,
 }
 
+#[derive(Clone)]
 pub struct StatsSnapshot {
-  connected_peer_count: u16,
-  choked_count: u16,
-  seeder_count: u16,
+  pub connected_peer_count: u16,
+  pub choked_count: u16,
+  pub seeder_count: u16,
 
-  pieces_completed: u32,
-  bytes_downloaded_this_session: u64,
-  total_bytes_have: u64,
-  verified_bytes: u64,
-  uploaded_bytes: u64,
-  last_speed_check_bytes: u64,
-  left: u64,
+  pub pieces_completed: u32,
+  pub bytes_downloaded_this_session: u64,
+  pub total_bytes_have: u64,
+  pub verified_bytes: u64,
+  pub uploaded_bytes: u64,
+  pub last_speed_check_bytes: u64,
+  pub left: u64,
 
-  ema_speed: f64,
+  pub ema_speed: f64,
 
-  total_pieces: u32,
-  total_bytes: u64,
+  pub total_pieces: u32,
+  pub total_bytes: u64,
 
-  bytes_in_progress: u64,
+  pub bytes_in_progress: u64,
 }
 
 pub struct Stats {
@@ -64,7 +68,6 @@ impl Stats {
   }
 
   pub fn update_stats_board(&self) {
-    // Safely cast lengths to u16 preventing silent overflow wrap-around
     let connected_peer_count = self.peers.len() as u16;
     let choked_count = self.choked.len() as u16;
     let seeder_count = self.seeders.len() as u16;
@@ -83,7 +86,7 @@ impl Stats {
       total_pieces: self.total_pieces,
       total_bytes: self.total_bytes,
       bytes_in_progress: self.total_bytes_have - self.verified_bytes,
-      left: (self.total_bytes - self.total_bytes_have).max(0),
+      left: (self.total_bytes - self.verified_bytes).max(0),
     };
 
     let _ = self.stats_board_chalk.send(snap);
@@ -95,7 +98,7 @@ impl Stats {
         self.pieces_completed += 1;
         self.verified_bytes += length as u64;
       }
-      TorrentEvent::Exists(len) => {
+      TorrentEvent::Exists(_idx,len) => {
         self.pieces_completed += 1;
         self.total_bytes_have += len as u64;
         self.verified_bytes += len as u64;
@@ -105,9 +108,11 @@ impl Stats {
         self.bytes_downloaded_this_session += length;
         self.total_bytes_have += length;
       }
+
       TorrentEvent::Connect(peer) => {
         self.peers.insert(peer);
       }
+
       TorrentEvent::Disconnect(peer) => {
         self.peers.remove(&peer);
         self.choked.remove(&peer);
@@ -191,7 +196,21 @@ impl Stats {
 
   // starts running
   pub fn run(mut self) -> JoinHandle<()> {
-    tokio::task::spawn(async { loop {} })
+    tokio::task::spawn(async move {
+      let tick_duration = Duration::from_secs(1);
+      let mut ticker = interval(tick_duration);
+      loop {
+        select! {
+          Some(event) = self.recon_receiver.recv() => {
+          self.process_event(event);
+        },
+        tick = ticker.tick() => {
+          self.sample(tick_duration);
+          self.update_stats_board();
+        }
+        }
+      }
+    })
   }
 }
 

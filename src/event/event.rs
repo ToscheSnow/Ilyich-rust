@@ -16,7 +16,7 @@ pub enum TorrentEvent {
   BlockReceive(Piece),
   PieceFail(u32),
   BlockUpload(u32),
-  Exists(u32),
+  Exists(u32,u32),
   // lifecycle
   DownloadComplete,
 }

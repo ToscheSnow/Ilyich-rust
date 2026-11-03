@@ -1,7 +1,8 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, vec};
 
 use bytes::{Bytes, BytesMut};
 use tokio::{
+  io::Join,
   sync::mpsc::{self, Sender},
   task::JoinHandle,
 };
@@ -32,6 +33,8 @@ pub struct Piece {
   pub offset: u32,
   pub block: Bytes,
 }
+
+const CONCURRENT_READS: u8 = 32;
 
 pub struct PieceManager {
   total_length: u64,
@@ -96,7 +99,7 @@ impl PieceManager {
     println!("Piece length: {}", format_bytes(piece_length as u64));
     println!("Piece count: {}", format_bytes(total_pieces as u64));
 
-    let (cmd_sender, incoming_cmd) = tokio::sync::mpsc::channel::<PieceManagerMessage>(500);
+    let (cmd_sender, incoming_cmd) = tokio::sync::mpsc::channel::<PieceManagerMessage>(2000);
 
     let manager: PieceManager = PieceManager {
       total_length,
@@ -119,9 +122,10 @@ impl PieceManager {
   }
 
   pub async fn run(mut self) {
-    self.complete_download_handler();
-    self.storage_manager.init_file_handles().await;
-    self.spawn();
+    self.storage_manager.init_file_handles().await; // 1. open/create files
+    self.verify_existing_pieces().await; // 2. scan what's already on disk
+    self.complete_download_handler(); // 3. maybe we're already done
+    self.spawn(); // 4. start the event loop
   }
 
   fn spawn(mut self) -> JoinHandle<()> {
@@ -164,7 +168,32 @@ impl PieceManager {
     }
   }
 
-  pub async fn verify_existing_pieces() {}
+  // read + hash check only, needs just &self (assuming read_block takes &self)
+  async fn check_piece(&mut self, piece_idx: u32) -> Option<u32> {
+    let len = self.validator.get_piece_length(piece_idx);
+    let piece = self
+      .storage_manager
+      .read_block(piece_idx, 0, len)
+      .await
+      .ok()?;
+    let start = piece_idx as usize * 20;
+    verify_piece(piece, &self.piece_hashes.slice(start..start + 20))
+      .await
+      .then_some(len)
+  }
+
+  pub async fn verify_existing_pieces(&mut self) {
+    for i in 0..self.total_pieces {
+      let Some(len) = self.check_piece(i).await else {
+        continue;
+      };
+      if !has_piece(&self.verified_pieces, i as usize) {
+        self.downloaded_piece_counter += 1;
+        add_piece(&mut self.verified_pieces, i as usize);
+        self.recon.announce(TorrentEvent::Exists(i, len));
+      }
+    }
+  }
 
   pub fn get_needed_blocks(&self, piece_idx: u32) -> Option<Vec<BlockRequest>> {
     if has_piece(&self.verified_pieces, piece_idx as usize) {
@@ -278,7 +307,6 @@ impl PieceManager {
     }
 
     let assembled = self.assemble_piece(piece_idx);
-    println!("Assembled the block");
 
     let start = piece_idx as usize * 20;
     let end = start + 20;
@@ -295,11 +323,8 @@ impl PieceManager {
     self.settle_suspects(piece_idx, assembled.clone());
 
     let piece_length = assembled.len() as u32;
-    println!("Try to write to disk");
 
     self.storage_manager.write_piece(piece_idx, assembled).await;
-
-    println!("Written to disk");
 
     if !has_piece(&self.verified_pieces, piece_idx as usize) {
       self.downloaded_piece_counter += 1;
@@ -353,7 +378,7 @@ impl PieceManager {
       length,
     }: &BlockRequest,
   ) -> Option<Bytes> {
-    if piece_idx > self.total_pieces || length > 32 * 1024 {
+    if piece_idx >= self.total_pieces || length > 32 * 1024 {
       return None;
     }
 

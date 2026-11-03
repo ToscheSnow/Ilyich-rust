@@ -3,7 +3,7 @@ use bytes::Bytes;
 
 pub fn parse_peer_event(message: Bytes) -> Result<PeerEvent, String> {
   if message.is_empty() {
-    return Err("Empty message received".to_string());
+    // return Err("Empty message received".to_string());
   }
 
   let message_id = message[0];

@@ -2,7 +2,7 @@ pub fn add_piece(bitfield: &mut [u8], piece_idx: usize) {
   let byte_idx = piece_idx >> 3;
 
   if byte_idx >= bitfield.len() {
-    panic!("pieceIndex outside of valid bounds");
+    return;
   }
 
   let bit = 1 << (7 - (piece_idx % 8));
@@ -14,7 +14,7 @@ pub fn has_piece(bitfield: &[u8], piece_idx: usize) -> bool {
   let byte_idx = piece_idx >> 3;
 
   if byte_idx >= bitfield.len() {
-    panic!("pieceIndex outside of valid bounds");
+    return false;
   }
   let bit = 1 << (7 - (piece_idx % 8));
 

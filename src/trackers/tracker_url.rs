@@ -22,7 +22,7 @@ pub fn http_tracker_query(
   }: TrackerUrlParams,
 ) -> String {
   let info_hash_encoded = encode_percentage_encoded(&info_hash);
-  let peer_id_encoded = encode_percentage_encoded(&CLIENT_ID_BYTES);
+  let peer_id_encoded = encode_percentage_encoded(CLIENT_ID_BYTES);
 
   let query = format!(
     "port={}&uploaded={}&downloaded={}&left={}",

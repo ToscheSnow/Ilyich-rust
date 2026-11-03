@@ -65,7 +65,6 @@ pub struct PeerManager {
 
 impl PeerManager {
   fn connect_peers(&mut self, peers: Vec<SocketAddr>) {
-    println!("inside connect_peers");
     let peer_reqs = PeerRequirements {
       piece_manager_sender: self.piece_manager_sender.clone(),
       recon: self.recon.clone(),
@@ -99,7 +98,6 @@ impl PeerManager {
       let handshake_buf = handshake_buf(info_hash.into(), CLIENT_ID_BYTES);
 
       let Ok(stream) = Self::connect_addr(peer_address).await else {
-        println!("Couldnt connect to peer");
         return;
       };
 
@@ -138,7 +136,6 @@ impl PeerManager {
 
       peer.run();
 
-      println!("Connected to a peer");
       //start running the peer loop
     })
   }
@@ -191,7 +188,6 @@ impl PeerManager {
   fn start_listening(&mut self) {}
 
   pub fn run(mut self) {
-    println!("Inside peer manager run");
     self.start_listening();
     Self::spawn(self);
   }
@@ -204,7 +200,7 @@ impl PeerManager {
     piece_manager_sender: Sender<PieceManagerMessage>,
     total_pieces: u32,
   ) -> (Self, tokio::sync::mpsc::Sender<PeerManagerMessage>) {
-    let (message_sender, message_receiver) = tokio::sync::mpsc::channel::<PeerManagerMessage>(2000);
+    let (message_sender, message_receiver) = tokio::sync::mpsc::channel::<PeerManagerMessage>(6000);
 
     let manager: PeerManager = PeerManager {
       connecting_peers: HashSet::new(),
@@ -222,9 +218,6 @@ impl PeerManager {
   }
 
   fn spawn(mut self) -> JoinHandle<()> {
-    println!("inside peer_manager spawn");
-    let mut succ = 0;
-    let mut fail = 0;
     tokio::spawn(async move {
       loop {
         select! {
@@ -248,22 +241,19 @@ impl PeerManager {
             match res {
               Some(res) => match res {
                 PeerManagerMessage::AttemptConnection(peers) => {
-                  println!("received message to connect to peers");
                   self.connect_peers(peers);
                 }
                 PeerManagerMessage::ConnectionFailed(addr) => {
                   self.connecting_peers.remove(&addr);
-                  fail+=1;
-                  println!("failed :{}", fail);
                 }
                 PeerManagerMessage::ConnectionSuccessful(addr, peer) => {
+                  let announced_peer = peer.clone();
                   self.connecting_peers.remove(&addr);
                   {
                     let mut lock = self.active_peers.write().unwrap();
                     lock.insert(peer);
                   }
-                  succ+=1;
-                  println!("Success : {}",succ);
+                  self.recon.announce(TorrentEvent::Connect(announced_peer));
                 }
               },
               None => break,

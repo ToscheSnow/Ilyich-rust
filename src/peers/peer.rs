@@ -123,7 +123,7 @@ impl Peer {
     let (from_socket_tx, from_socket) = mpsc::channel::<Bytes>(2560); // A: reader -> peer
     let (to_socket, to_socket_rx) = mpsc::channel::<Bytes>(2560); // B: peer -> writer
 
-    let (cmd_sender, cmd_receiver) = mpsc::channel::<PeerCommand>(200);
+    let (cmd_sender, cmd_receiver) = mpsc::channel::<PeerCommand>(1000);
 
     let available_pieces = Arc::new(RwLock::new(Vec::new()));
 
@@ -166,12 +166,13 @@ impl Peer {
           msg = self.from_socket.recv() => match msg {
             Some(raw) => match parse_peer_event(raw) {
               Ok(event) => self.process_event(event).await,
-              Err(err) => println!("{err}"),
+              Err(err) => {},
             },
             None => break, // socket reader died 💀
           },
         }
       }
+      self.disconnect();
     });
   }
 
@@ -212,7 +213,6 @@ impl Peer {
   }
 
   async fn process_cmd(&mut self, cmd: PeerCommand) {
-    println!("Processing a command");
     match cmd {
       PeerCommand::Request(block_req) => {
         self.request(block_req).await;
@@ -262,7 +262,6 @@ impl Peer {
   async fn process_event(&mut self, message: PeerEvent) {
     match message {
       PeerEvent::CHOKE => {
-        println!("choked 😨");
         self.state.peer_choking = true;
         self.pending_requests.clear();
 
@@ -274,7 +273,6 @@ impl Peer {
 
       //done
       PeerEvent::UNCHOKE => {
-        println!("Unchoked 😇");
         self.state.peer_choking = false;
         self.recon.announce(Unchoke(self.peer_handle.clone()));
         //tell scheduler , stats, peerManager
@@ -343,19 +341,16 @@ impl Peer {
         offset,
         block,
       } => {
-        println!("They sent a piece");
         let piece_key = &(piece_idx, offset);
 
-        let Some(pending_req) = self.pending_requests.get(piece_key) else {
-          eprintln!("Received unexpected piece");
-          return;
+        if let Some(pending_req) = self.pending_requests.get(piece_key) {
+          // eprintln!("Received unexpected piece");
+          // return;
+          if pending_req.length != block.len() as u32 {
+            println!("Received block with incorrect length");
+            return;
+          }
         };
-
-        if pending_req.length != block.len() as u32 {
-          println!("Received block with incorrect length");
-          return;
-        }
-
         self.pending_requests.remove(piece_key);
 
         self
@@ -365,13 +360,11 @@ impl Peer {
             offset,
             block,
           }))
-          .await
-          .unwrap();
+          .await;
       }
 
       //done
       PeerEvent::BITFIELD { bitfield } => {
-        println!("Received a bitfield");
         {
           let mut curr_bitfield = self.available_pieces.write().unwrap();
           *curr_bitfield = bitfield.into();
@@ -434,7 +427,7 @@ impl Peer {
       },
     );
 
-    self.to_socket.send(buf.freeze()).await.unwrap();
+    self.to_socket.send(buf.freeze()).await.is_err();
     // mpsc channel push
   }
 
