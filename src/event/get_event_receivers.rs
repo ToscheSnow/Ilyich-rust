@@ -50,6 +50,7 @@ pub fn build() -> (Recon<TorrentEvent>, Receivers) {
     Topic::Choke,
     Topic::Unchoke,
     Topic::Exists,
+    Topic::BlockReceive,
   ]);
 
   let stats = b.subscribe([

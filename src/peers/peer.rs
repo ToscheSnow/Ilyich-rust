@@ -120,10 +120,10 @@ impl Peer {
       addr,
     }: PeerDeps,
   ) -> Self {
-    let (from_socket_tx, from_socket) = mpsc::channel::<Bytes>(1000); // A: reader -> peer
-    let (to_socket, to_socket_rx) = mpsc::channel::<Bytes>(1000); // B: peer -> writer
+    let (from_socket_tx, from_socket) = mpsc::channel::<Bytes>(100000); // A: reader -> peer
+    let (to_socket, to_socket_rx) = mpsc::channel::<Bytes>(100000); // B: peer -> writer
 
-    let (cmd_sender, cmd_receiver) = mpsc::channel::<PeerCommand>(1000);
+    let (cmd_sender, cmd_receiver) = mpsc::channel::<PeerCommand>(100000);
 
     let available_pieces = Arc::new(RwLock::new(Vec::new()));
 
@@ -176,24 +176,43 @@ impl Peer {
     });
   }
 
+  // fn start_outgoing_writer(mut writer: OwnedWriteHalf, mut to_socket_rx: mpsc::Receiver<Bytes>) {
+  //   tokio::spawn(async move {
+  //     loop {
+  //       match to_socket_rx.recv().await {
+  //         Some(bytes) => {
+  //           if writer.write_all(&bytes).await.is_err() {
+  //             break;
+  //           }
+  //         }
+  //         None => break,
+  //       }
+  //     }
+  //   });
+  // }
+
   fn start_outgoing_writer(mut writer: OwnedWriteHalf, mut to_socket_rx: mpsc::Receiver<Bytes>) {
     tokio::spawn(async move {
-      loop {
-        match to_socket_rx.recv().await {
-          Some(bytes) => {
-            if writer.write_all(&bytes).await.is_err() {
-              break;
-            }
+      let mut batch = BytesMut::with_capacity(64 * 1024);
+      while let Some(first) = to_socket_rx.recv().await {
+        batch.extend_from_slice(&first);
+        while batch.len() < 64 * 1024 {
+          match to_socket_rx.try_recv() {
+            Ok(more) => batch.extend_from_slice(&more),
+            Err(_) => break,
           }
-          None => break,
         }
+        if writer.write_all(&batch).await.is_err() {
+          break;
+        }
+        batch.clear();
       }
     });
   }
 
   fn start_incoming_reader(mut reader: OwnedReadHalf, from_socket_tx: mpsc::Sender<Bytes>) {
     tokio::spawn(async move {
-      let mut buf = BytesMut::with_capacity(128 * 1024);
+      let mut buf = BytesMut::with_capacity(64 * 1024);
       loop {
         match reader.read_buf(&mut buf).await {
           Ok(0) | Err(_) => {
@@ -280,8 +299,6 @@ impl Peer {
 
       // done
       PeerEvent::INTERESTED => {
-        println!("🧩 Someone is interested");
-
         self.state.peer_interested = true;
         self.state.am_choking = false;
 
@@ -343,17 +360,16 @@ impl Peer {
       } => {
         let piece_key = &(piece_idx, offset);
 
-        if let Some(pending_req) = self.pending_requests.get(piece_key) {
-          // eprintln!("Received unexpected piece");
-          // return;
-          if pending_req.length != block.len() as u32 {
-            println!("Received block with incorrect length");
-            return;
-          }
-        };
-        self.pending_requests.remove(piece_key);
+        let solicited = self.pending_requests.remove(piece_key).is_some();
+        if solicited {
+          self.recon.announce(TorrentEvent::BlockReceive(Piece {
+            piece_idx,
+            offset,
+            block: block.clone(), // refcount bump
+          }));
+        }
 
-        self
+        let _ = self
           .piece_manager_sender
           .send(PieceManagerMessage::IncomingBlock(Piece {
             piece_idx,
@@ -450,7 +466,6 @@ impl Peer {
     buf.extend_from_slice(bitfield);
 
     self.to_socket.send(buf.freeze()).await.unwrap();
-    println!("We sent our bitfield");
   }
 
   async fn send_have_req(&mut self, piece_idx: u32) {
@@ -488,7 +503,6 @@ impl Peer {
   }
 
   async fn send_unchoke_req(&mut self) {
-    println!("🏖️ UNCHOKE PEER");
     let mut unchoke_buf = BytesMut::with_capacity(5);
 
     // length afterward is 1

@@ -85,8 +85,8 @@ impl Stats {
       ema_speed: self.ema_speed,
       total_pieces: self.total_pieces,
       total_bytes: self.total_bytes,
-      bytes_in_progress: self.total_bytes_have - self.verified_bytes,
-      left: (self.total_bytes - self.verified_bytes).max(0),
+      bytes_in_progress: self.total_bytes_have.saturating_sub(self.verified_bytes),
+      left: self.total_bytes.saturating_sub(self.verified_bytes),
     };
 
     let _ = self.stats_board_chalk.send(snap);
@@ -98,7 +98,7 @@ impl Stats {
         self.pieces_completed += 1;
         self.verified_bytes += length as u64;
       }
-      TorrentEvent::Exists(_idx,len) => {
+      TorrentEvent::Exists(_idx, len) => {
         self.pieces_completed += 1;
         self.total_bytes_have += len as u64;
         self.verified_bytes += len as u64;
@@ -132,6 +132,13 @@ impl Stats {
       TorrentEvent::SeederConnect(peer) => {
         self.seeders.insert(peer);
       }
+      TorrentEvent::DownloadComplete => {
+        tokio::spawn(async {
+          tokio::time::sleep(Duration::from_millis(2000)).await;
+
+          std::process::exit(0);
+        });
+      }
       _ => {}
     }
   }
@@ -142,7 +149,9 @@ impl Stats {
       return;
     }
 
-    let delta = self.bytes_downloaded_this_session - self.last_speed_check_bytes;
+    let delta = self
+      .bytes_downloaded_this_session
+      .saturating_sub(self.last_speed_check_bytes);
     let inst = delta as f64 / secs;
     self.last_speed_check_bytes = self.bytes_downloaded_this_session;
 

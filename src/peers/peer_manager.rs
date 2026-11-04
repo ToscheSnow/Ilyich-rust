@@ -32,7 +32,6 @@ use crate::{
   },
   pieces::piece_manager::PieceManagerMessage,
   recon::Recon,
-  torrent::Torrent,
 };
 
 #[derive(Clone)]
@@ -174,6 +173,7 @@ impl PeerManager {
   async fn connect_addr(addr: SocketAddr) -> Result<TcpStream, String> {
     match timeout(Duration::from_secs(10), TcpStream::connect(addr)).await {
       Ok(Ok(stream)) => {
+        stream.set_nodelay(true);
         return Ok(stream);
       }
       Ok(Err(_)) => {

@@ -1,31 +1,36 @@
 use bytes::Bytes;
 use tokio::select;
 use tokio::sync::mpsc;
-use tokio::{sync::oneshot, task::JoinSet};
+use tokio::task::JoinSet;
 
 use crate::pieces::piece_manager::PieceManagerMessage;
 use crate::pieces::verify_piece::verify_piece;
+
+const MAX_VERIFICATION_LIMITS: u8 = 3;
 
 pub enum ValidatorCommand {
   VerifyPiece {
     piece_idx: u32,
     data: Bytes,
     expected_hash: Bytes,
-    reply: oneshot::Sender<PieceManagerMessage>,
   },
 }
 
-const MAX_VERIFICATION_LIMITS: u8 = 4;
-
 pub struct PieceValidator {
-  command_rx: mpsc::Receiver<ValidatorCommand>,
+  command_rx: mpsc::UnboundedReceiver<ValidatorCommand>,
+  manager_tx: mpsc::Sender<PieceManagerMessage>,
 }
 
 impl PieceValidator {
-  pub fn new() -> (Self, mpsc::Sender<ValidatorCommand>) {
-    let (command_tx, command_rx) = mpsc::channel(10);
+  pub fn new(
+    manager_tx: mpsc::Sender<PieceManagerMessage>,
+  ) -> (Self, mpsc::UnboundedSender<ValidatorCommand>) {
+    let (command_tx, command_rx) = mpsc::unbounded_channel();
 
-    let validator = PieceValidator { command_rx };
+    let validator = PieceValidator {
+      command_rx,
+      manager_tx,
+    };
 
     (validator, command_tx)
   }
@@ -35,11 +40,13 @@ impl PieceValidator {
     tokio::spawn(async move {
       loop {
         select! {
-          Some(ValidatorCommand::VerifyPiece {piece_idx,data,expected_hash,reply}) = self.command_rx.recv(),if in_progress.len()  < MAX_VERIFICATION_LIMITS as usize => {
+          Some(ValidatorCommand::VerifyPiece {piece_idx,data,expected_hash}) = self.command_rx.recv(),if in_progress.len()  < MAX_VERIFICATION_LIMITS as usize => {
+            let transmitter = self.manager_tx.clone();
+            let return_data = data.clone();
             in_progress.spawn_blocking(move || {
               let result = verify_piece(data,&expected_hash);
 
-              let _ = reply.send(PieceManagerMessage::ValidatorReply {piece_idx,success:result});
+              let _ = transmitter.blocking_send(PieceManagerMessage::ValidatorResult { piece_idx, success: result,data:return_data});
             });
           },
           Some(_) = in_progress.join_next(),if !in_progress.is_empty() => {},

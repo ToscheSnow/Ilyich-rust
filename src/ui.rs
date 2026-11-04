@@ -1,12 +1,12 @@
-use std::time::Duration;
-
 use ratatui::{
   Frame,
   crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
-  style::{Color, Style},
-  text::Line,
-  widgets::{Block, BorderType, Padding, Paragraph},
+  layout::{Constraint, Direction, Layout},
+  style::Color,
+  text::{Line, Span},
+  widgets::{Block, Borders, Paragraph},
 };
+use std::time::Duration;
 use tokio::{sync::watch, task::JoinHandle};
 
 use crate::stats::{StatsSnapshot, format_bytes};
@@ -14,98 +14,156 @@ use crate::stats::{StatsSnapshot, format_bytes};
 pub fn start_stats_ui(rx: watch::Receiver<StatsSnapshot>) -> JoinHandle<()> {
   tokio::task::spawn_blocking(move || {
     let mut terminal = ratatui::init();
+
     loop {
       let snap = rx.borrow().clone();
+
       if terminal.draw(|f| draw(f, &snap)).is_err() {
         break;
       }
 
-      // doubles as the refresh timer (like your 500ms setInterval)
       if event::poll(Duration::from_millis(500)).unwrap_or(false) {
-        if let Ok(Event::Key(key)) = event::read() {
-          let ctrl_c =
-            key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
-          if key.kind == KeyEventKind::Press && (key.code == KeyCode::Char('q') || ctrl_c) {
-            break;
+        match event::read() {
+          Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
+            let ctrl_c =
+              key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
+
+            if key.code == KeyCode::Char('q') || ctrl_c {
+              break;
+            }
           }
+          _ => {}
         }
       }
     }
+
     ratatui::restore();
   })
 }
 
 fn draw(f: &mut Frame, s: &StatsSnapshot) {
+  let area = f.area();
+
+  let block = Block::default()
+    .borders(Borders::ALL)
+    .border_type(ratatui::widgets::BorderType::Rounded)
+    .padding(ratatui::widgets::Padding::uniform(1));
+
+  let inner = block.inner(area);
+  f.render_widget(block, area);
+
   let ratio = if s.total_bytes == 0 {
     0.0
   } else {
     (s.verified_bytes as f64 / s.total_bytes as f64).clamp(0.0, 1.0)
   };
 
-  let mem = match memory_stats::memory_stats() {
-    Some(m) => format!("RSS: {} ", format_bytes(m.physical_mem as u64),),
-    None => "memory stats unavailable".to_string(),
-  };
+  let pct = format!("{:.1}%", ratio * 100.0);
+  let speed = format_mbps(s.ema_speed.max(0.0));
+  let eta = format_eta(s.total_bytes.saturating_sub(s.verified_bytes), s.ema_speed);
+  let memory = memory_stats::memory_stats();
 
-  let bright_green = Style::new().fg(Color::LightGreen);
-  let green = Style::new().fg(Color::Green);
-  let white = Style::new().fg(Color::White);
-  let yellow = Style::new().fg(Color::LightYellow);
+  let chunks = Layout::default()
+    .direction(Direction::Vertical)
+    .constraints([
+      Constraint::Length(5), // Progress section text (Progress, ETA, Speed, Downloaded, Uploaded)
+      Constraint::Length(4), // Peers section text (Margin + Peers, Choked, Seeders)
+      Constraint::Length(2), // Memory lines text (Margin + RSS/Heap info)
+    ])
+    .split(inner);
 
-  let lines = vec![
-    Line::styled(
-      format!(
-        "Progress: {} pieces ({:.1}%) — {} total",
-        s.pieces_completed,
-        ratio * 100.0,
-        format_bytes(s.verified_bytes)
+  // Progress Section (Combining elements to exactly follow TS formatting and colors)
+  let progress = vec![
+    Line::from(vec![
+      Span::styled(
+        format!(
+          "Progress {} pieces completed ({}) — ",
+          s.pieces_completed, pct
+        ),
+        Color::White,
       ),
-      bright_green,
-    ),
-    Line::styled(
-      format!("Uploaded {} total", format_bytes(s.uploaded_bytes)),
-      green,
-    ),
-    Line::styled(format!("Speed: {}", format_mbps(s.ema_speed)), white),
-    Line::styled(
+      Span::styled(
+        format!("{} total", format_bytes(s.verified_bytes)),
+        Color::White,
+      ),
+    ]),
+    Line::from(Span::styled(format!("ETA: {eta}"), Color::White)),
+    Line::from(Span::styled(format!("Speed: {speed}"), Color::White)),
+    Line::from(Span::styled(
       format!(
         "Downloaded (Not written to Disk) {}",
         format_bytes(s.bytes_in_progress)
       ),
-      white,
-    ),
-    Line::styled(format!("ETA: {}", format_eta(s.left, s.ema_speed)), white),
-    Line::raw(""),
-    Line::styled(format!("Peers: {}", s.connected_peer_count), white),
-    Line::styled(format!("Choked Peers: {}", s.choked_count), white),
-    Line::styled(format!("Seeders: {}", s.seeder_count), white),
-    Line::raw(""),
-    Line::styled(mem, yellow),
+      Color::Green,
+    )),
+    Line::from(Span::styled(
+      format!("Uploaded {} total", format_bytes(s.uploaded_bytes)),
+      Color::Green,
+    )),
   ];
+  f.render_widget(Paragraph::new(progress), chunks[0]);
 
-  f.render_widget(
-    Paragraph::new(lines).block(
-      Block::bordered()
-        .border_type(BorderType::Rounded) // borderStyle="round"
-        .padding(Padding::uniform(1)), // padding={1}
-    ),
-    f.area(),
-  );
-}
+  // Peers Section
+  let peers = vec![
+    Line::from(""), // Top margin
+    Line::from(Span::styled(
+      format!("Peers: {}", s.connected_peer_count),
+      Color::White,
+    )),
+    Line::from(Span::styled(
+      format!("Choked Peers: {}", s.choked_count),
+      Color::Red,
+    )),
+    Line::from(Span::styled(
+      format!("Seeders: {}", s.seeder_count),
+      Color::LightGreen,
+    )),
+  ];
+  f.render_widget(Paragraph::new(peers), chunks[1]);
 
-fn format_mbps(bytes_per_sec: f64) -> String {
-  format!("{:.2} Mbps", bytes_per_sec * 8.0 / 1e6)
-}
-
-fn format_eta(left: u64, bytes_per_sec: f64) -> String {
-  if left == 0 {
-    return "done 🎉".to_string();
+  // Memory Section
+  let mut memory_lines = vec![Line::from("")]; // Top margin
+  if let Some(mem) = memory {
+    memory_lines.push(Line::from(Span::styled(
+      format!("RSS: {} | Heap: N/A", format_bytes(mem.physical_mem as u64)),
+      Color::Black,
+    )));
+    memory_lines.push(Line::from(Span::styled(
+      "External: N/A | ArrayBuffers: N/A",
+      Color::Gray,
+    )));
+  } else {
+    memory_lines.push(Line::from(Span::styled(
+      "RSS: N/A | Heap: N/A",
+      Color::Black,
+    )));
+    memory_lines.push(Line::from(Span::styled(
+      "External: N/A | ArrayBuffers: N/A",
+      Color::Gray,
+    )));
   }
-  if bytes_per_sec <= 0.0 {
+  f.render_widget(Paragraph::new(memory_lines), chunks[2]);
+}
+
+fn format_mbps(bytes_per_second: f64) -> String {
+  format!("{:.2} Mbps", (bytes_per_second * 8.0) / 1e6)
+}
+
+fn format_eta(remaining_bytes: u64, speed: f64) -> String {
+  if !speed.is_finite() || speed <= 0.0 {
     return "--".to_string();
   }
-  let sec = (left as f64 / bytes_per_sec) as u64;
-  let (h, m, s) = (sec / 3600, (sec % 3600) / 60, sec % 60);
+
+  let sec = (remaining_bytes as f64 / speed) as u64;
+
+  if sec == 0 {
+    return "done 🎉".to_string();
+  }
+
+  let h = sec / 3600;
+  let m = (sec % 3600) / 60;
+  let s = sec % 60;
+
   if h > 0 {
     format!("{h}h {m}m")
   } else if m > 0 {

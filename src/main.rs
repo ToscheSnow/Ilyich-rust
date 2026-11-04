@@ -1,4 +1,3 @@
-mod StorageManager;
 mod event;
 mod file_parsing;
 mod file_worker;
@@ -8,6 +7,7 @@ mod pieces;
 mod recon;
 mod scheduler;
 mod stats;
+mod storage_manager;
 mod torrent;
 mod trackers;
 mod ui;
@@ -15,7 +15,11 @@ mod utils;
 
 use std::{env, path::Path};
 
-use crate::utils::open_file;
+use crate::{torrent::Torrent, utils::open_file};
+
+use mimalloc::MiMalloc;
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 #[tokio::main]
 async fn main() {
@@ -30,7 +34,9 @@ async fn main() {
   let download_location = &args[2];
 
   let file = open_file::open_file(Path::new(torrent_path));
-  let torrent = torrent::Torrent::new(file, Path::new(download_location));
+  let torrent = Torrent::new(file, Path::new(download_location))
+    .await
+    .unwrap();
 
   torrent.run().await;
 }

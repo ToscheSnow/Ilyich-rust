@@ -5,21 +5,24 @@ edition = "2024"
 
 [dependencies]
 rand = "0.10.3"
-rng = "0.1.0"
 bytes = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 tokio = { version = "1.53.1", features = ["full"] }
-sha1 =  "0.10"
+sha1 = { version = "0.10", features = ["asm"] }
 hex = "0.4"
 ratatui = "0.29"
 memory-stats = "1"
 futures = "0.3.34"
+mimalloc = "0.1"
+
+[profile.dev]
+opt-level = 1            # your own code was unoptimized in dev, only deps were at 3
 
 [profile.dev.package."*"]
 opt-level = 3
 
-
 [profile.release]
 opt-level = 3
-lto = "thin"
+lto = "fat"
 codegen-units = 1
-
+debug = false
