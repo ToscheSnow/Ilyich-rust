@@ -51,6 +51,7 @@ impl FileWorker {
       meta,
     };
 
+    println!("Resolving file paths 📁");
     manager.init_file_paths();
 
     manager

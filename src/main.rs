@@ -10,7 +10,7 @@ mod stats;
 mod storage_manager;
 mod torrent;
 mod trackers;
-mod ui;
+// mod ui;
 mod utils;
 
 use std::{env, path::Path};

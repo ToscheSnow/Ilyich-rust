@@ -1,18 +1,13 @@
-use std::{
-  collections::{HashMap, HashSet},
-  time::Duration,
-  vec,
-};
+use std::{collections::HashMap, vec};
 
 use bytes::{Bytes, BytesMut};
-use ratatui::crossterm::event;
 use tokio::{
-  sync::mpsc::{self, Sender, UnboundedReceiver, UnboundedSender},
+  sync::mpsc::{self, UnboundedSender},
   task::JoinHandle,
 };
 
 use crate::{
-  pieces::piece_validator::{PieceValidator, ValidatorCommand},
+  pieces::piece_validator::ValidatorCommand,
   storage_manager::{BlockMeta, StorageCommand, StorageMessage, StorageResult},
 };
 
@@ -27,11 +22,7 @@ use crate::{
     client::BLOCK_SIZE,
     peer::{PeerCommand, PeerHandle},
   },
-  pieces::{
-    bitfield::{add_piece, has_piece},
-    piece_geometry::PieceGeometry,
-    verify_piece::verify_piece,
-  },
+  pieces::{bitfield::add_piece, piece_geometry::PieceGeometry},
   recon::Recon,
   stats::format_bytes,
 };
@@ -135,8 +126,8 @@ impl PieceManager {
     let blocks_per_piece = piece_length.div_ceil(BLOCK_SIZE as u32) as u16;
     let geometry = PieceGeometry::new(total_length, piece_length);
 
-    println!("Piece length: {}", piece_length);
-    println!("Piece count: {}", format_bytes(total_pieces as u64));
+    println!("Piece Length: {}", format_bytes(piece_length as u64));
+    println!("Piece count: {}", total_pieces);
 
     let manager: PieceManager = PieceManager {
       total_length,
@@ -307,7 +298,8 @@ impl PieceManager {
   }
 
   pub async fn run(mut self) {
-    self.states.fill(PieceState::Checking); // nothing is trusted until verified
+    self.states.fill(PieceState::Checking);
+    println!("Checking for existing files ⏳");
     self.start_next_checks();
     self.spawn();
   }

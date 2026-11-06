@@ -6,7 +6,7 @@ use tokio::task::JoinSet;
 use crate::pieces::piece_manager::PieceManagerMessage;
 use crate::pieces::verify_piece::verify_piece;
 
-const MAX_VERIFICATION_LIMITS: u8 = 3;
+const MAX_VERIFICATION_LIMITS: u8 = 4;
 
 pub enum ValidatorCommand {
   VerifyPiece {

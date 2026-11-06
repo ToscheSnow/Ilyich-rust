@@ -1,10 +1,8 @@
-use ratatui::widgets::LegendPosition::Top;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::{
   event::event::{Topic, TorrentEvent},
   recon::{Recon, ReconBuilder},
-  stats::TransferStats,
 };
 
 pub struct Receivers {
@@ -51,6 +49,7 @@ pub fn build() -> (Recon<TorrentEvent>, Receivers) {
     Topic::Unchoke,
     Topic::Exists,
     Topic::BlockReceive,
+    Topic::Connect,
   ]);
 
   let stats = b.subscribe([
@@ -64,6 +63,10 @@ pub fn build() -> (Recon<TorrentEvent>, Receivers) {
     Topic::SeederConnect,
     Topic::Exists,
     Topic::Unchoke,
+    Topic::PieceFail,
+    Topic::Ban,
+    Topic::Exists,
+    Topic::IncomingRequest,
   ]);
 
   let recon = b.build();

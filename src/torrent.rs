@@ -1,23 +1,23 @@
 use std::{
-  collections::HashSet,
   path::{Path, PathBuf},
-  sync::{Arc, RwLock},
+  time::Duration,
 };
 
 use bytes::Bytes;
-use tokio::sync::mpsc::{self, Sender};
+use tokio::{
+  select,
+  sync::mpsc::{self},
+  time::interval,
+};
 
 use crate::{
   event::get_event_receivers::{self, Receivers},
-  file_parsing::{get_meta::get_meta, parser_types::BencodeVal, parserDecoder::BencodeDecoder},
+  file_parsing::{get_meta::get_meta, parser_decoder::BencodeDecoder, parser_types::BencodeVal},
   file_worker::{
     FileLayout::{MultiFileLayout, SingleFileLayout},
-    FileWorker, TorrentMetadata,
+    FileWorker,
   },
-  peers::{
-    client::CLIENT_ID_BYTES,
-    peer_manager::{PeerManager, PeerManagerMessage},
-  },
+  peers::{client::CLIENT_ID_BYTES, peer_manager::PeerManager},
   pieces::{
     piece_manager::{PieceManager, PieceManagerMessage},
     piece_validator::PieceValidator,
@@ -30,7 +30,6 @@ use crate::{
     http_tracker::{HttpTracker, TrackerAnnounceArgs},
     udp_tracker::UdpTracker,
   },
-  ui::start_stats_ui,
 };
 
 pub struct Torrent {
@@ -64,10 +63,10 @@ impl Torrent {
     let (
       recon,
       Receivers {
-        pieces,
         peers,
         scheduler,
         stats,
+        ..
       },
     ) = get_event_receivers::build();
 
@@ -95,10 +94,7 @@ impl Torrent {
       piece_manager_receiver,
     );
 
-    let active_peers = Arc::new(RwLock::new(HashSet::new()));
-
     let (peer_manager, peer_manager_sender) = PeerManager::new(
-      active_peers.clone(),
       Bytes::copy_from_slice(&meta.info_hash),
       recon_clone,
       peers,
@@ -111,7 +107,7 @@ impl Torrent {
 
     let (http_urls, udp_urls) = extract_tracker_urls(&decoded_torrent);
 
-    let scheduler = Scheduler::new(active_peers, scheduler, total_length, meta.piece_length);
+    let scheduler = Scheduler::new(scheduler, total_length, meta.piece_length);
 
     let tracker_args = TrackerAnnounceArgs {
       info_hash,
@@ -150,16 +146,28 @@ impl Torrent {
   }
 
   pub async fn run(self) {
-    let ui = start_stats_ui(self.stats.get_stats_receiver());
+    // let ui = start_stats_ui(self.stats.get_stats_receiver());
     self.stats.run();
 
     self.piece_manager.run().await;
 
+    println!("Fetching peers from trackers 🧩");
+    self.http_tracker.run();
+    self.udp_tracker.run();
+
     self.peer_manager.run();
     self.scheduler.run();
-    self.udp_tracker.run();
-    self.http_tracker.run();
 
-    let _ = ui.await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    println!("Connecting to peers ✈️");
+    let mut interval = interval(Duration::from_secs(10));
+
+    loop {
+      select! {
+        tick = interval.tick() => {
+          // println!("A tick occured")
+        }
+      }
+    }
   }
 }

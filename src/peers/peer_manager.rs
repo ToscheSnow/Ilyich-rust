@@ -1,7 +1,6 @@
 use std::{
   collections::HashSet,
   net::SocketAddr,
-  sync::{Arc, RwLock},
   time::Duration,
 };
 
@@ -49,7 +48,7 @@ pub enum PeerManagerMessage {
 
 pub struct PeerManager {
   connecting_peers: HashSet<SocketAddr>,
-  active_peers: Arc<RwLock<HashSet<PeerHandle>>>,
+  active_peers: HashSet<PeerHandle>,
   info_hash: Bytes,
 
   message_receiver: mpsc::Receiver<PeerManagerMessage>,
@@ -173,7 +172,6 @@ impl PeerManager {
   async fn connect_addr(addr: SocketAddr) -> Result<TcpStream, String> {
     match timeout(Duration::from_secs(10), TcpStream::connect(addr)).await {
       Ok(Ok(stream)) => {
-        stream.set_nodelay(true);
         return Ok(stream);
       }
       Ok(Err(_)) => {
@@ -193,7 +191,6 @@ impl PeerManager {
   }
 
   pub fn new(
-    active_peers: Arc<RwLock<HashSet<PeerHandle>>>,
     info_hash: Bytes,
     recon: Recon<TorrentEvent>,
     recon_listener: UnboundedReceiver<TorrentEvent>,
@@ -204,7 +201,7 @@ impl PeerManager {
 
     let manager: PeerManager = PeerManager {
       connecting_peers: HashSet::new(),
-      active_peers,
+      active_peers: HashSet::new(),
       info_hash,
       message_receiver,
       message_sender: message_sender.clone(),
@@ -227,8 +224,7 @@ impl PeerManager {
                 TorrentEvent::Ban(_) => {}
                 TorrentEvent::DownloadComplete => return,
                 TorrentEvent::Disconnect(peer) => {
-                  let mut lock = self.active_peers.write().unwrap();
-                  lock.remove(&peer);
+                 self.active_peers.remove(&peer);
                 }
 
                 _ => {}
@@ -249,10 +245,7 @@ impl PeerManager {
                 PeerManagerMessage::ConnectionSuccessful(addr, peer) => {
                   let announced_peer = peer.clone();
                   self.connecting_peers.remove(&addr);
-                  {
-                    let mut lock = self.active_peers.write().unwrap();
-                    lock.insert(peer);
-                  }
+                  self.active_peers.insert(peer);
                   self.recon.announce(TorrentEvent::Connect(announced_peer));
                 }
               },

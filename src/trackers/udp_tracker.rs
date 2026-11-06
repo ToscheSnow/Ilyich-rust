@@ -3,7 +3,6 @@ use rand::RngExt;
 use std::{
   collections::{HashMap, HashSet},
   net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-  os::unix::raw::pid_t,
   sync::Arc,
   time::{Duration, Instant},
 };
@@ -109,7 +108,6 @@ impl UdpTracker {
     peer_manager_sender: mpsc::Sender<PeerManagerMessage>,
     total_length: u64,
   ) -> Self {
-    println!("Init a udp tracker");
     let session_key: u32 = rand::rng().random();
 
     let (event_tx, event_rx) = mpsc::channel::<TrackerEvent>(200);
@@ -143,7 +141,6 @@ impl UdpTracker {
 
   pub fn run(mut self) -> JoinHandle<()> {
     tokio::spawn(async move {
-      println!("Inside udp run");
       let socket = Arc::new(
         UdpSocket::bind("0.0.0.0:0")
           .await
@@ -219,7 +216,7 @@ impl UdpTracker {
                 event_tx.send(event).await;
               }
               Err(error_string) => {
-                println!("{}", error_string)
+                // println!("{}", error_string)
               }
             };
           }
@@ -235,10 +232,8 @@ impl UdpTracker {
       TrackerEvent::AnnounceResponse {
         to,
         transaction_id,
-        interval,
-        seeders,
-        leechers,
         peers,
+        ..
       } => {
         if !self.pending_requests.contains_key(&transaction_id) {
           return;

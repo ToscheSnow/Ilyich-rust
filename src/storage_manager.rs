@@ -9,7 +9,7 @@ use tokio::task::JoinSet;
 use crate::file_worker::FileWorker;
 use crate::pieces::piece_manager::PieceManagerMessage;
 
-const MAX_CONCURRENCY_WRITES: usize = 2;
+const MAX_CONCURRENCY_WRITES: usize = 5;
 const MAX_CONCURRENCY_READS: usize = 20;
 
 pub struct StorageManager {
@@ -52,6 +52,7 @@ impl StorageManager {
     mut worker: FileWorker,
     manager_tx: mpsc::Sender<PieceManagerMessage>,
   ) -> std::io::Result<(Self, mpsc::UnboundedSender<StorageMessage>)> {
+    println!("Locating files 🧭");
     worker.init_file_handles().await;
     let (message_tx, message_rx) = mpsc::unbounded_channel::<StorageMessage>();
     let manager = StorageManager {

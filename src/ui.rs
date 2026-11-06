@@ -77,7 +77,7 @@ fn draw(f: &mut Frame, s: &StatsSnapshot) {
     Line::from(vec![
       Span::styled(
         format!(
-          "Progress {} pieces completed ({}) — ",
+          "Progress {} pieces ({}) — ",
           s.pieces_completed, pct
         ),
         Color::White,
@@ -112,7 +112,7 @@ fn draw(f: &mut Frame, s: &StatsSnapshot) {
     )),
     Line::from(Span::styled(
       format!("Choked Peers: {}", s.choked_count),
-      Color::Red,
+      Color::LightGreen,
     )),
     Line::from(Span::styled(
       format!("Seeders: {}", s.seeder_count),
@@ -125,21 +125,8 @@ fn draw(f: &mut Frame, s: &StatsSnapshot) {
   let mut memory_lines = vec![Line::from("")]; // Top margin
   if let Some(mem) = memory {
     memory_lines.push(Line::from(Span::styled(
-      format!("RSS: {} | Heap: N/A", format_bytes(mem.physical_mem as u64)),
-      Color::Black,
-    )));
-    memory_lines.push(Line::from(Span::styled(
-      "External: N/A | ArrayBuffers: N/A",
-      Color::Gray,
-    )));
-  } else {
-    memory_lines.push(Line::from(Span::styled(
-      "RSS: N/A | Heap: N/A",
-      Color::Black,
-    )));
-    memory_lines.push(Line::from(Span::styled(
-      "External: N/A | ArrayBuffers: N/A",
-      Color::Gray,
+      format!("Memory: {} | Heap: N/A", format_bytes(mem.physical_mem as u64)),
+      Color::Yellow,
     )));
   }
   f.render_widget(Paragraph::new(memory_lines), chunks[2]);

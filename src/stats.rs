@@ -7,6 +7,8 @@ use tokio::{
   time::interval,
 };
 
+use tokio::{fs::OpenOptions, io::AsyncWriteExt};
+
 use crate::{event::event::TorrentEvent, peers::peer::PeerHandle};
 
 #[derive(Clone)]
@@ -206,6 +208,12 @@ impl Stats {
   // starts running
   pub fn run(mut self) -> JoinHandle<()> {
     tokio::task::spawn(async move {
+      let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("stats.log")
+        .await
+        .expect("Failed to open stats.log");
       let tick_duration = Duration::from_secs(1);
       let mut ticker = interval(tick_duration);
       loop {
@@ -216,6 +224,21 @@ impl Stats {
         tick = ticker.tick() => {
           self.sample(tick_duration);
           self.update_stats_board();
+
+          let line = format!(
+            "Peers: {} | Seeders: {} | Choked: {} | Pieces: {}/{} | Speed: {}/s | Downloaded: {} | Uploaded: {}\n",
+            self.peers.len(),
+            self.seeders.len(),
+            self.choked.len(),
+            self.pieces_completed,
+            self.total_pieces,
+            format_bytes(self.ema_speed as u64),
+            format_bytes(self.bytes_downloaded_this_session),
+            format_bytes(self.uploaded_bytes),
+        );
+    
+        let _ = file.write_all(line.as_bytes()).await;
+
         }
         }
       }

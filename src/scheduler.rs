@@ -1,6 +1,5 @@
 use std::{
   collections::{BTreeMap, HashMap, HashSet},
-  sync::{Arc, RwLock},
   time::{Duration, Instant},
 };
 
@@ -25,7 +24,7 @@ const MIN_DEPTH: usize = 20;
 const MAX_DEPTH: usize = 400;
 const TARGET_QUEUE_SECS: f64 = 1.0; // keep ~4s of data queued per peer
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(7);
-const MEMORY_BUDGET: u64 = 150 * 1024 * 1024;
+const MEMORY_BUDGET: u64 = 125 * 1024 * 1024;
 
 #[derive(Default)]
 struct RateInfo {
@@ -38,7 +37,7 @@ pub struct Scheduler {
   pieces_in_slot: HashSet<u32>, // pieces we are currently downloading
   pending: BTreeMap<u32, Vec<u32>>, // piece -> offsets still to hand out (lowest piece first)
 
-  active_peers: Arc<RwLock<HashSet<PeerHandle>>>, // shared with PeerManager
+  active_peers: HashSet<PeerHandle>, // shared with PeerManager
   unchoked: HashSet<PeerHandle>,
   verified_pieces: HashSet<u32>,
   first_unverified: u32,
@@ -59,7 +58,6 @@ pub struct Scheduler {
 
 impl Scheduler {
   pub fn new(
-    active_peers: Arc<RwLock<HashSet<PeerHandle>>>,
     event_queue: UnboundedReceiver<TorrentEvent>,
     total_length: u64,
     piece_length: u32,
@@ -70,7 +68,7 @@ impl Scheduler {
       max_active_pieces: by_memory,
       pieces_in_slot: HashSet::new(),
       pending: BTreeMap::new(),
-      active_peers,
+      active_peers: HashSet::new(),
       unchoked: HashSet::new(),
       verified_pieces: HashSet::new(),
       first_unverified: 0,
@@ -90,7 +88,6 @@ impl Scheduler {
   pub fn run(mut self) -> JoinHandle<()> {
     tokio::spawn(async move {
       let mut sweep = interval(Duration::from_secs(2));
-      let mut safety = interval(Duration::from_millis(200)); // catches Have/bitfield changes
       loop {
         select! {
           event = self.event_queue.recv() => match event {
@@ -101,9 +98,7 @@ impl Scheduler {
             self.update_rates();
             self.release_stale();
             self.schedule();
-            self.log_stats();
           },
-          _ = safety.tick() => self.schedule(),
         }
       }
     })
@@ -114,13 +109,14 @@ impl Scheduler {
     match event {
       TorrentEvent::Unchoke(peer) => {
         self.unchoked.insert(peer.clone());
-        self.request_peer(&peer);
+        self.schedule();
       }
       TorrentEvent::Choke(peer) => {
         self.unchoked.remove(&peer);
         self.release_requests_of(&peer);
       }
       TorrentEvent::Disconnect(peer) => {
+        self.active_peers.remove(&peer);
         self.unchoked.remove(&peer);
         self.peer_rate.remove(&peer);
         self.release_requests_of(&peer);
@@ -162,6 +158,12 @@ impl Scheduler {
       TorrentEvent::Exists(idx, _len) => {
         self.verified_pieces.insert(idx);
         self.forget_piece(idx);
+      }
+      TorrentEvent::Bitfield => {
+        self.schedule();
+      }
+      TorrentEvent::Connect(peer) => {
+        self.active_peers.insert(peer);
       }
       _ => {}
     }
@@ -263,7 +265,7 @@ impl Scheduler {
   }
 
   fn schedule(&mut self) {
-    let peers: Vec<PeerHandle> = self.active_peers.read().unwrap().iter().cloned().collect();
+    let peers: Vec<PeerHandle> = self.active_peers.iter().cloned().collect();
     for peer in &peers {
       self.request_peer(peer);
     }
@@ -371,31 +373,5 @@ impl Scheduler {
   // peers start with an empty bitfield, so guard the index before has_piece
   fn peer_has(bits: &Vec<u8>, piece: u32) -> bool {
     (piece as usize) / 8 < bits.len() && has_piece(bits, piece as usize)
-  }
-
-  fn log_stats(&self) {
-    use std::io::Write;
-    let mut rates: Vec<f64> = self.peer_rate.values().map(|r| r.per_sec).collect();
-    rates.sort_by(|a, b| b.partial_cmp(a).unwrap());
-    let mb_s = rates.iter().sum::<f64>() * BLOCK_SIZE as f64 / 1e6;
-    let line = format!(
-      "{:.1}MB/s peers={} unchoked={} sending={} inflight={} pending={} slots={}/{} top3={:.0?}\n",
-      mb_s,
-      self.active_peers.read().unwrap().len(),
-      self.unchoked.len(),
-      rates.iter().filter(|r| **r > 0.5).count(),
-      self.per_peer.values().sum::<usize>(),
-      self.pending.values().map(|v| v.len()).sum::<usize>(),
-      self.pieces_in_slot.len(),
-      self.max_active_pieces,
-      &rates[..rates.len().min(3)],
-    );
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-      .create(true)
-      .append(true)
-      .open("stats.log")
-    {
-      let _ = f.write_all(line.as_bytes());
-    }
   }
 }
