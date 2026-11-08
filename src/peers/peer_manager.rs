@@ -1,8 +1,4 @@
-use std::{
-  collections::HashSet,
-  net::SocketAddr,
-  time::Duration,
-};
+use std::{collections::HashSet, net::SocketAddr, time::Duration};
 
 use bytes::Bytes;
 use tokio::{
@@ -26,10 +22,14 @@ use crate::{
   peers::{
     client::CLIENT_ID_BYTES,
     handshake_buf::handshake_buf,
-    peer::{Peer, PeerDeps, PeerHandle},
+    peer::{
+      Peer,
+      PeerCommand::{self, SendBitfield},
+      PeerComms, PeerDeps, PeerHandle,
+    },
     verify_handshake::{HandshakeRes, verify_handshake},
   },
-  pieces::piece_manager::PieceManagerMessage,
+  pieces::{bitfield::add_piece, piece_manager::PieceManagerMessage},
   recon::Recon,
 };
 
@@ -48,6 +48,7 @@ pub enum PeerManagerMessage {
 
 pub struct PeerManager {
   connecting_peers: HashSet<SocketAddr>,
+  bitfield: Vec<u8>,
   active_peers: HashSet<PeerHandle>,
   info_hash: Bytes,
 
@@ -117,13 +118,16 @@ impl PeerManager {
         addr: peer_address,
         socket_reader: reader,
         socket_writer: writer,
+        total_pieces,
+      };
+
+      let peer_comms: PeerComms = PeerComms {
         piece_manager_sender,
         recon,
-        total_pieces,
       };
       //make a new peer here
 
-      let peer: Peer = Peer::new(deps);
+      let peer: Peer = Peer::new(deps, peer_comms);
       // send a message to peer manager to add it
       reply_sender
         .send(PeerManagerMessage::ConnectionSuccessful(
@@ -209,6 +213,7 @@ impl PeerManager {
       recon,
       piece_manager_sender,
       total_pieces,
+      bitfield: vec![0u8; ((total_pieces + 7) >> 3) as usize],
     };
 
     return (manager, message_sender);
@@ -227,6 +232,18 @@ impl PeerManager {
                  self.active_peers.remove(&peer);
                 }
 
+                TorrentEvent::PieceComplete(piece_idx,_) => {
+                  add_piece(&mut self.bitfield, piece_idx as usize);
+                  for peer_handle in &self.active_peers {
+                   let _ =  peer_handle.cmd_sender.send(crate::peers::peer::PeerCommand::Have(piece_idx)).await;
+                  };
+                }
+
+                TorrentEvent::Exists(idx,_len) => {
+                  add_piece(&mut self.bitfield, idx as usize);
+                }
+
+
                 _ => {}
               },
               None => break,
@@ -244,6 +261,7 @@ impl PeerManager {
                 }
                 PeerManagerMessage::ConnectionSuccessful(addr, peer) => {
                   let announced_peer = peer.clone();
+                  let _ = peer.cmd_sender.send(PeerCommand::SendBitfield(Bytes::copy_from_slice(&self.bitfield))).await;
                   self.connecting_peers.remove(&addr);
                   self.active_peers.insert(peer);
                   self.recon.announce(TorrentEvent::Connect(announced_peer));

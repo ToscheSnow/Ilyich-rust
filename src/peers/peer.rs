@@ -8,7 +8,7 @@ use std::{
 use tokio::{
   net::tcp::{OwnedReadHalf, OwnedWriteHalf},
   select,
-  sync::mpsc::{self, Sender},
+  sync::mpsc::{self},
 };
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -16,19 +16,20 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{
   event::event::TorrentEvent::{self, Unchoke},
-  peer_protocol::{BlockRequest, PeerEvent, PendingReq},
+  peer_protocol::{PeerEvent, PendingReq},
   peers::parse_peer_event::parse_peer_event,
   pieces::{
     bitfield::{add_piece, count_pieces, has_piece},
     piece_manager::{IncomingRequest, Piece, PieceManagerMessage},
   },
   recon::Recon,
+  storage_manager::BlockMeta,
 };
 
 pub enum PeerCommand {
-  Request(BlockRequest),
+  Request(BlockMeta),
   Have(u32),
-  SendBlock(BlockRequest, Bytes),
+  SendBlock(BlockMeta, Bytes),
   SendBitfield(Bytes),
   Shutdown,
 }
@@ -99,12 +100,13 @@ impl Hash for PeerHandle {
 pub struct PeerDeps {
   pub total_pieces: u32,
   pub addr: SocketAddr,
-
-  pub recon: Recon<TorrentEvent>,
   pub socket_reader: OwnedReadHalf,
   pub socket_writer: OwnedWriteHalf,
+}
 
-  pub piece_manager_sender: Sender<PieceManagerMessage>,
+pub struct PeerComms {
+  pub recon: Recon<TorrentEvent>,
+  pub piece_manager_sender: mpsc::Sender<PieceManagerMessage>,
 }
 
 impl Peer {
@@ -113,12 +115,14 @@ impl Peer {
   pub fn new(
     PeerDeps {
       total_pieces,
-      recon,
       socket_reader,
       socket_writer,
-      piece_manager_sender,
       addr,
     }: PeerDeps,
+    PeerComms {
+      recon,
+      piece_manager_sender,
+    }: PeerComms,
   ) -> Self {
     let (from_socket_tx, from_socket) = mpsc::channel::<Bytes>(100000); // A: reader -> peer
     let (to_socket, to_socket_rx) = mpsc::channel::<Bytes>(100000); // B: peer -> writer
@@ -242,6 +246,8 @@ impl Peer {
       }
 
       PeerCommand::SendBlock(requested_block, bytes) => {
+        let block_length = requested_block.length;
+        self.recon.announce(TorrentEvent::BlockUpload(block_length));
         self.send_piece(requested_block, &bytes).await;
       }
 
@@ -330,24 +336,31 @@ impl Peer {
       }
 
       //done
-      PeerEvent::REQUEST(BlockRequest {
+      PeerEvent::REQUEST(BlockMeta {
         piece_idx,
         offset,
         length,
       }) => {
+        // Reject req if we are choking them
         if self.state.am_choking {
           return;
         }
-        // tell using upwards command instead of event bus
+
+        // Make sure req is not malicious
+        if piece_idx >= self.total_pieces || length >= 65536 {
+          return;
+        }
+
+        //dial piece manager for requested block
         let _ = self
           .piece_manager_sender
           .send(PieceManagerMessage::IncomingRequest(IncomingRequest {
-            incoming_request: BlockRequest {
+            incoming_request: BlockMeta {
               piece_idx,
               offset,
               length,
             },
-            outgoing_sender: self.cmd_sender.clone(),
+            peer: self.peer_handle.clone(),
           }))
           .await;
       }
@@ -419,8 +432,8 @@ impl Peer {
     }
   }
 
-  async fn request(&mut self, req: BlockRequest) {
-    let BlockRequest {
+  async fn request(&mut self, req: BlockMeta) {
+    let BlockMeta {
       piece_idx,
       offset,
       length,
@@ -479,8 +492,8 @@ impl Peer {
     self.to_socket.send(have_buf.freeze()).await.unwrap();
   }
 
-  async fn send_piece(&mut self, req: BlockRequest, block_buf: &[u8]) {
-    let BlockRequest {
+  async fn send_piece(&mut self, req: BlockMeta, block_buf: &[u8]) {
+    let BlockMeta {
       piece_idx, offset, ..
     } = req;
     let mut buf = BytesMut::with_capacity(4 + 1 + 4 + 4 + block_buf.len());

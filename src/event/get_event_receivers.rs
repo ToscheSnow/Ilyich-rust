@@ -6,7 +6,6 @@ use crate::{
 };
 
 pub struct Receivers {
-  pub pieces: UnboundedReceiver<TorrentEvent>,
   pub peers: UnboundedReceiver<TorrentEvent>,
   pub scheduler: UnboundedReceiver<TorrentEvent>,
   pub stats: UnboundedReceiver<TorrentEvent>,
@@ -15,16 +14,6 @@ pub struct Receivers {
 /// Adjust the topic lists to whatever each component actually needs.
 pub fn build() -> (Recon<TorrentEvent>, Receivers) {
   let mut b = ReconBuilder::<TorrentEvent>::new();
-
-  let pieces = b.subscribe([
-    Topic::BlockReceive,
-    Topic::PieceComplete,
-    Topic::PieceFail,
-    Topic::Have,
-    Topic::Bitfield,
-    Topic::Exists,
-    Topic::DownloadComplete,
-  ]);
 
   let peers = b.subscribe([
     Topic::Connect,
@@ -35,6 +24,8 @@ pub fn build() -> (Recon<TorrentEvent>, Receivers) {
     Topic::Ban,
     Topic::IncomingRequest,
     Topic::DownloadComplete,
+    Topic::PieceComplete,
+    Topic::Exists,
   ]);
 
   let scheduler = b.subscribe([
@@ -74,7 +65,6 @@ pub fn build() -> (Recon<TorrentEvent>, Receivers) {
   (
     recon,
     Receivers {
-      pieces,
       peers,
       scheduler,
       stats,

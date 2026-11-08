@@ -1,6 +1,8 @@
 use bytes::Bytes;
 use std::time::Instant;
 
+use crate::storage_manager::BlockMeta;
+
 pub enum PeerEvent {
   CHOKE,
   UNCHOKE,
@@ -14,7 +16,7 @@ pub enum PeerEvent {
     bitfield: Bytes,
   },
 
-  REQUEST(BlockRequest),
+  REQUEST(BlockMeta),
 
   PIECE {
     piece_idx: u32,
@@ -22,17 +24,10 @@ pub enum PeerEvent {
     block: Bytes,
   },
 
-  CANCEL(BlockRequest),
+  CANCEL(BlockMeta),
 
   PORT(u16),
   EXTENDED(u8),
-}
-
-#[derive(Clone)]
-pub struct BlockRequest {
-  pub piece_idx: u32,
-  pub offset: u32,
-  pub length: u32,
 }
 
 pub struct PendingReq {

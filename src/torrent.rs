@@ -19,7 +19,8 @@ use crate::{
   },
   peers::{client::CLIENT_ID_BYTES, peer_manager::PeerManager},
   pieces::{
-    piece_manager::{PieceManager, PieceManagerMessage},
+    piece_geometry::PieceGeometry,
+    piece_manager::{PieceManager, PieceManagerComms, PieceManagerDeps, PieceManagerMessage},
     piece_validator::PieceValidator,
   },
   scheduler::Scheduler,
@@ -86,13 +87,21 @@ impl Torrent {
     let (validator, validator_tx) = PieceValidator::new(piece_manager_sender.clone());
     validator.run();
 
-    let piece_manager = PieceManager::new(
-      meta.clone(),
+    let piece_manager_deps = PieceManagerDeps {
+      piece_hashes: meta.piece_hashes,
+      geometry: PieceGeometry::new(total_length, meta.piece_length),
+      piece_length: meta.piece_length as u64,
+      total_pieces,
+    };
+
+    let piece_manager_comms = PieceManagerComms {
+      incoming_rx: piece_manager_receiver,
       storage_tx,
       validator_tx,
-      recon.clone(),
-      piece_manager_receiver,
-    );
+      recon,
+    };
+
+    let piece_manager = PieceManager::new(piece_manager_deps, piece_manager_comms);
 
     let (peer_manager, peer_manager_sender) = PeerManager::new(
       Bytes::copy_from_slice(&meta.info_hash),

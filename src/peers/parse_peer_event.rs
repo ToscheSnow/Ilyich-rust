@@ -1,4 +1,4 @@
-use crate::peer_protocol::{BlockRequest, PeerEvent};
+use crate::{peer_protocol::PeerEvent, storage_manager::BlockMeta};
 use bytes::Bytes;
 
 pub fn parse_peer_event(message: Bytes) -> Result<PeerEvent, String> {
@@ -29,7 +29,7 @@ pub fn parse_peer_event(message: Bytes) -> Result<PeerEvent, String> {
       if message.len() != 13 {
         return Err(format!("Invalid REQUEST message length: {}", message.len()));
       }
-      PeerEvent::REQUEST(BlockRequest {
+      PeerEvent::REQUEST(BlockMeta {
         piece_idx: u32::from_be_bytes(message[1..5].try_into().unwrap()),
         offset: u32::from_be_bytes(message[5..9].try_into().unwrap()),
         length: u32::from_be_bytes(message[9..13].try_into().unwrap()),
@@ -51,7 +51,7 @@ pub fn parse_peer_event(message: Bytes) -> Result<PeerEvent, String> {
       if message.len() != 13 {
         return Err(format!("Invalid CANCEL message length: {}", message.len()));
       }
-      PeerEvent::CANCEL(BlockRequest {
+      PeerEvent::CANCEL(BlockMeta {
         piece_idx: u32::from_be_bytes(message[1..5].try_into().unwrap()),
         offset: u32::from_be_bytes(message[5..9].try_into().unwrap()),
         length: u32::from_be_bytes(message[9..13].try_into().unwrap()),

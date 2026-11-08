@@ -40,7 +40,7 @@ pub enum StorageResult {
   },
 }
 
-#[derive(Clone)]
+#[derive(Clone, Hash, PartialEq, Eq)]
 pub struct BlockMeta {
   pub piece_idx: u32,
   pub offset: u32,

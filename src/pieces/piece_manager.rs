@@ -7,17 +7,16 @@ use tokio::{
 };
 
 use crate::{
-  pieces::piece_validator::ValidatorCommand,
-  storage_manager::{BlockMeta, StorageCommand, StorageMessage, StorageResult},
+  pieces::{piece_cache::PieceCache, piece_validator::ValidatorCommand},
+  storage_manager::{
+    BlockMeta,
+    StorageCommand::{self, ReadPiece},
+    StorageMessage, StorageResult,
+  },
 };
 
 use crate::{
   event::event::TorrentEvent::{self},
-  file_worker::{
-    FileLayout::{MultiFileLayout, SingleFileLayout},
-    TorrentMetadata,
-  },
-  peer_protocol::BlockRequest,
   peers::{
     client::BLOCK_SIZE,
     peer::{PeerCommand, PeerHandle},
@@ -46,26 +45,24 @@ pub enum PieceState {
 const MAX_CONCURRENT_CHECKS: usize = 4;
 const MAX_WRITE_RETRIES: u8 = 3;
 pub struct PieceManager {
-  total_length: u64,
-  downloaded_completed: bool,
-  blocks_per_piece: u16,
-  downloaded_piece_counter: u32,
   total_pieces: u32,
+  piece_hashes: Bytes,
 
-  incoming_cmd: mpsc::Receiver<PieceManagerMessage>,
+  downloaded_completed: bool,
+  downloaded_piece_counter: u32,
+
+  incoming_rx: mpsc::Receiver<PieceManagerMessage>,
 
   geometry: PieceGeometry,
-  piece_hashes: Bytes,
   verified_pieces: Vec<u8>,
   blocks: HashMap<(u32, u32), Bytes>,
 
+  //comms
   storage_tx: UnboundedSender<StorageMessage>,
-
   validator_tx: UnboundedSender<ValidatorCommand>,
 
   recon: Recon<TorrentEvent>,
   senders: HashMap<u32, HashMap<u64, PeerHandle>>,
-
   fail_streak: u32,
 
   states: Vec<PieceState>,
@@ -73,6 +70,10 @@ pub struct PieceManager {
   check_cursor: u32,
   checks_in_flight: usize,
   write_retries: HashMap<u32, u8>,
+
+  cache: PieceCache,
+  // map piece idx to block+peer
+  pending_requests: HashMap<u32, Vec<(BlockMeta, PeerHandle)>>,
 }
 
 pub enum PieceManagerMessage {
@@ -88,54 +89,57 @@ pub enum PieceManagerMessage {
 
 #[derive(Clone)]
 pub struct IncomingRequest {
-  pub incoming_request: BlockRequest,
-  pub outgoing_sender: mpsc::Sender<PeerCommand>,
+  pub incoming_request: BlockMeta,
+  pub peer: PeerHandle,
 }
 
-impl IncomingRequest {
-  pub async fn send_block(self, command: PeerCommand) {
-    let _ = self.outgoing_sender.send(command).await;
-  }
+pub struct PieceManagerDeps {
+  pub piece_hashes: Bytes,
+  pub piece_length: u64,
+  pub total_pieces: u32,
+  pub geometry: PieceGeometry,
+}
+
+pub struct PieceManagerComms {
+  pub storage_tx: UnboundedSender<StorageMessage>,
+  pub validator_tx: UnboundedSender<ValidatorCommand>,
+  pub incoming_rx: mpsc::Receiver<PieceManagerMessage>,
+  pub recon: Recon<TorrentEvent>,
 }
 
 impl PieceManager {
-  pub fn new(
-    meta: TorrentMetadata,
-
-    storage_tx: UnboundedSender<StorageMessage>,
-
-    validator_tx: UnboundedSender<ValidatorCommand>,
-
-    recon: Recon<TorrentEvent>,
-
-    incoming_cmd: mpsc::Receiver<PieceManagerMessage>,
-  ) -> Self {
-    let TorrentMetadata {
+  pub fn new(deps: PieceManagerDeps, comms: PieceManagerComms) -> Self {
+    let PieceManagerDeps {
       piece_hashes,
       piece_length,
-      ..
-    } = meta;
+      total_pieces,
+      geometry,
+    } = deps;
 
-    let total_length = match meta.layout {
-      SingleFileLayout { length } => length,
-      MultiFileLayout { files } => files.iter().map(|file| file.length).sum(),
-    };
+    let PieceManagerComms {
+      storage_tx,
+      validator_tx,
+      incoming_rx,
+      recon,
+    } = comms;
 
-    let total_pieces = total_length.div_ceil(piece_length as u64) as u32;
     let verified_pieces: Vec<u8> = vec![0u8; ((total_pieces + 7) >> 3) as usize];
-    let blocks_per_piece = piece_length.div_ceil(BLOCK_SIZE as u32) as u16;
-    let geometry = PieceGeometry::new(total_length, piece_length);
+    const CACHE_BUDGET: usize = 32 * 1024 * 1024; // 64 MiB
 
-    println!("Piece Length: {}", format_bytes(piece_length as u64));
+    let cache_size = (CACHE_BUDGET / piece_length.max(1) as usize).clamp(4, 256);
+
+    println!(
+      "😈 Total download size: {}",
+      format_bytes(piece_length * total_pieces as u64)
+    );
+    println!("🍕 Piece Length: {}", format_bytes(piece_length as u64));
     println!("Piece count: {}", total_pieces);
 
     let manager: PieceManager = PieceManager {
-      total_length,
       downloaded_completed: false,
-      blocks_per_piece,
       downloaded_piece_counter: 0,
       total_pieces,
-      incoming_cmd,
+      incoming_rx,
       validator_tx,
       storage_tx,
       geometry,
@@ -149,6 +153,8 @@ impl PieceManager {
       check_cursor: 0,
       checks_in_flight: 0,
       write_retries: HashMap::new(),
+      cache: PieceCache::new(cache_size),
+      pending_requests: HashMap::new(),
     };
 
     return manager;
@@ -156,14 +162,56 @@ impl PieceManager {
 
   fn spawn(mut self) -> JoinHandle<()> {
     tokio::spawn(async move {
+      let mut hit = 0;
+      let mut disk_read = 0;
+      let mut parked = 0;
       loop {
-        match self.incoming_cmd.recv().await {
+        match self.incoming_rx.recv().await {
           Some(cmd) => match cmd {
             PieceManagerMessage::IncomingRequest(IncomingRequest {
               incoming_request,
-              outgoing_sender,
+              peer,
             }) => {
-              println!("Received an incoming request");
+              if self.state_of(incoming_request.piece_idx) != Some(PieceState::Complete) {
+                continue;
+              }
+              //check cache to see if it is available
+              let block_option = self.cache.get_block(&incoming_request);
+
+              match block_option {
+                //send immediately
+                Some(block_data) => {
+                  hit += 1;
+                  let _ = peer
+                    .cmd_sender
+                    .try_send(PeerCommand::SendBlock(incoming_request, block_data));
+                  println!("cache hit {}", hit);
+                }
+                None => {
+                  // add this person to pending
+                  let piece_idx = incoming_request.piece_idx;
+                  let key = (incoming_request, peer);
+                  let pending_reqs = self.pending_requests.entry(piece_idx).or_default();
+
+                  pending_reqs.push(key);
+
+                  // only request if storage request hasnt been sent already
+                  if pending_reqs.len() == 1 {
+                    disk_read += 1;
+                    println!("Disk reads {}", disk_read);
+                    self
+                      .storage_tx
+                      .send(StorageMessage::Command(ReadPiece(BlockMeta {
+                        piece_idx,
+                        offset: 0,
+                        length: self.geometry.get_piece_length(piece_idx),
+                      })));
+                  } else {
+                    parked += 1;
+                    println!("Parked {}", parked);
+                  }
+                }
+              }
             }
 
             PieceManagerMessage::StorageResult(StorageResult::ReadBlock { meta, data }) => {
@@ -179,6 +227,26 @@ impl PieceManager {
                   Err(_) => self.finish_check(meta.piece_idx, false), // unreadable = not done
                 }
               } else {
+                match data {
+                  Ok(bytes) => {
+                    //put piece in cache
+                    self.cache.put_piece(meta.piece_idx, bytes);
+
+                    // drain existing requester
+                    if let Some(reqs) = self.pending_requests.remove(&meta.piece_idx) {
+                      for (req, peer) in reqs {
+                        if let Some(bytes) = self.cache.get_block(&req) {
+                          let _ = peer.cmd_sender.try_send(PeerCommand::SendBlock(req, bytes));
+                        }
+                      }
+                    }
+                  }
+
+                  //clear pending map
+                  Err(_) => {
+                    self.pending_requests.remove(&meta.piece_idx);
+                  }
+                }
               }
             }
 

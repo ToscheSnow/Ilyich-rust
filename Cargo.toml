@@ -13,6 +13,7 @@ hex = "0.4"
 # ratatui = "0.29"
 memory-stats = "1"
 mimalloc = "0.1"
+lru = "0.19.0"
 
 [profile.dev]
 opt-level = 1            # your own code was unoptimized in dev, only deps were at 3

@@ -3,6 +3,7 @@ use std::{
   time::{Duration, Instant},
 };
 
+use bytes::Bytes;
 use tokio::{
   select,
   sync::mpsc::{UnboundedReceiver, error::TrySendError},
@@ -12,17 +13,23 @@ use tokio::{
 
 use crate::{
   event::event::TorrentEvent,
-  peer_protocol::BlockRequest,
   peers::{
     client::BLOCK_SIZE,
-    peer::{PeerCommand, PeerHandle},
+    peer::{
+      PeerCommand::{self, SendBitfield},
+      PeerHandle,
+    },
   },
-  pieces::{bitfield::has_piece, piece_geometry::PieceGeometry},
+  pieces::{
+    bitfield::{add_piece, has_piece},
+    piece_geometry::PieceGeometry,
+  },
+  storage_manager::BlockMeta,
 };
 
-const MIN_DEPTH: usize = 20;
-const MAX_DEPTH: usize = 400;
-const TARGET_QUEUE_SECS: f64 = 1.0; // keep ~4s of data queued per peer
+const MIN_DEPTH: usize = 10;
+const MAX_DEPTH: usize = 1000;
+const TARGET_QUEUE_SECS: f64 = 4.0; // keep ~4s of data queued per peer
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(7);
 const MEMORY_BUDGET: u64 = 125 * 1024 * 1024;
 
@@ -32,6 +39,8 @@ struct RateInfo {
   per_sec: f64,
 }
 
+pub struct SchedulerDeps {}
+
 pub struct Scheduler {
   max_active_pieces: u16,
   pieces_in_slot: HashSet<u32>, // pieces we are currently downloading
@@ -39,7 +48,7 @@ pub struct Scheduler {
 
   active_peers: HashSet<PeerHandle>, // shared with PeerManager
   unchoked: HashSet<PeerHandle>,
-  verified_pieces: HashSet<u32>,
+  verified_pieces: Vec<u8>,
   first_unverified: u32,
 
   requested: HashMap<(u32, u32), (PeerHandle, Instant)>, // (piece, offset) -> who, when
@@ -63,6 +72,7 @@ impl Scheduler {
     piece_length: u32,
   ) -> Self {
     let by_memory = (MEMORY_BUDGET / piece_length.max(1) as u64).clamp(4, u16::MAX as u64) as u16;
+    let num_pieces = total_length.div_ceil(piece_length as u64);
 
     Self {
       max_active_pieces: by_memory,
@@ -70,7 +80,7 @@ impl Scheduler {
       pending: BTreeMap::new(),
       active_peers: HashSet::new(),
       unchoked: HashSet::new(),
-      verified_pieces: HashSet::new(),
+      verified_pieces: vec![0_u8; ((num_pieces + 7) >> 3) as usize],
       first_unverified: 0,
       requested: HashMap::new(),
       received: HashSet::new(),
@@ -87,7 +97,7 @@ impl Scheduler {
 
   pub fn run(mut self) -> JoinHandle<()> {
     tokio::spawn(async move {
-      let mut sweep = interval(Duration::from_secs(2));
+      let mut sweep = interval(Duration::from_secs(1));
       loop {
         select! {
           event = self.event_queue.recv() => match event {
@@ -140,7 +150,7 @@ impl Scheduler {
         }
       }
       TorrentEvent::PieceComplete(piece_idx, _len) => {
-        self.verified_pieces.insert(piece_idx);
+        add_piece(&mut self.verified_pieces, piece_idx as usize);
         self.forget_piece(piece_idx);
         self.fail_count.remove(&piece_idx);
         self.cooldown.remove(&piece_idx);
@@ -156,7 +166,7 @@ impl Scheduler {
           .insert(piece_idx, Instant::now() + Duration::from_secs(secs));
       }
       TorrentEvent::Exists(idx, _len) => {
-        self.verified_pieces.insert(idx);
+        add_piece(&mut self.verified_pieces, idx as usize);
         self.forget_piece(idx);
       }
       TorrentEvent::Bitfield => {
@@ -197,7 +207,9 @@ impl Scheduler {
 
   /// put a block back in the pool, but only if it's still wanted
   fn requeue(&mut self, piece_idx: u32, offset: u32) {
-    if !self.pieces_in_slot.contains(&piece_idx) || self.verified_pieces.contains(&piece_idx) {
+    if !self.pieces_in_slot.contains(&piece_idx)
+      || has_piece(&self.verified_pieces, piece_idx as usize)
+    {
       return;
     }
     let key = (piece_idx, offset);
@@ -287,7 +299,7 @@ impl Scheduler {
       };
 
       let length = self.geometry.get_block_length(piece, offset);
-      let cmd = PeerCommand::Request(BlockRequest {
+      let cmd = PeerCommand::Request(BlockMeta {
         piece_idx: piece,
         offset,
         length,
@@ -357,13 +369,13 @@ impl Scheduler {
       return None;
     }
 
-    while self.verified_pieces.contains(&self.first_unverified) {
+    while has_piece(&self.verified_pieces, self.first_unverified as usize) {
       self.first_unverified += 1;
     }
 
     let now = Instant::now();
     (self.first_unverified..self.total_pieces).find(|p| {
-      !self.verified_pieces.contains(p)
+      !has_piece(&self.verified_pieces, *p as usize)
         && !self.pieces_in_slot.contains(p)
         && self.cooldown.get(p).map_or(true, |t| *t <= now)
         && Self::peer_has(has, *p)
