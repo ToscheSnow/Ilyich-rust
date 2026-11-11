@@ -121,15 +121,6 @@ fn draw(f: &mut Frame, s: &StatsSnapshot) {
   ];
   f.render_widget(Paragraph::new(peers), chunks[1]);
 
-  // Memory Section
-  let mut memory_lines = vec![Line::from("")]; // Top margin
-  if let Some(mem) = memory {
-    memory_lines.push(Line::from(Span::styled(
-      format!("Memory: {} | Heap: N/A", format_bytes(mem.physical_mem as u64)),
-      Color::Yellow,
-    )));
-  }
-  f.render_widget(Paragraph::new(memory_lines), chunks[2]);
 }
 
 fn format_mbps(bytes_per_second: f64) -> String {
