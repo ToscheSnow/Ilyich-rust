@@ -137,6 +137,7 @@ impl Stats {
         tokio::spawn(async {
           tokio::time::sleep(Duration::from_millis(2000)).await;
 
+          println!("Download complete shutting down 😪");
           std::process::exit(0);
         });
       }
