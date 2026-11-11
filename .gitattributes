@@ -1,4 +1,8 @@
-# Treat the file as generated code (recommended for bundled/minified frontend assets)
-assets/index.html linguist-generated=true
+# Ignore every HTML file in any folder
+**/*.html linguist-vendored
+*.html linguist-vendored
 
-assets/** linguist-vendored
+# Ensure Rust files are always detected
+*.rs linguist-detectable=true
+**/*.rs linguist-detectable=true
+
