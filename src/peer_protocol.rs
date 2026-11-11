@@ -8,13 +8,9 @@ pub enum PeerEvent {
   UNCHOKE,
   INTERESTED,
   NotInterested,
-  HAVE {
-    piece_idx: u32,
-  },
 
-  BITFIELD {
-    bitfield: Bytes,
-  },
+  HAVE(u32),
+  BITFIELD(Bytes),
 
   REQUEST(BlockMeta),
 

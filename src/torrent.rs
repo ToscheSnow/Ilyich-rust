@@ -17,13 +17,14 @@ use crate::{
     FileLayout::{MultiFileLayout, SingleFileLayout},
     FileWorker,
   },
-  peers::{client::CLIENT_ID_BYTES, peer_manager::PeerManager},
+  peers::{client::CLIENT_ID_BYTES, handshake_buf::handshake_buf, peer_manager::PeerManager},
   pieces::{
     piece_geometry::PieceGeometry,
     piece_manager::{PieceManager, PieceManagerComms, PieceManagerDeps, PieceManagerMessage},
     piece_validator::PieceValidator,
   },
   scheduler::Scheduler,
+  server,
   stats::Stats,
   storage_manager::StorageManager,
   trackers::{
@@ -64,10 +65,9 @@ impl Torrent {
     let (
       recon,
       Receivers {
-        peers,
-        scheduler,
-        stats,
-        ..
+        peers_rx,
+        scheduler_rx,
+        stats_rx,
       },
     ) = get_event_receivers::build();
 
@@ -77,7 +77,7 @@ impl Torrent {
     // the piece manager's channel has to exist BEFORE the workers,
     // because storage and validator need a sender to report back 📬
     let (piece_manager_sender, piece_manager_receiver) =
-      mpsc::channel::<PieceManagerMessage>(200000);
+      mpsc::channel::<PieceManagerMessage>(20000);
 
     let storage_manager = FileWorker::new(meta_clone, PathBuf::from(download_dir));
     let (storage, storage_tx) =
@@ -104,19 +104,19 @@ impl Torrent {
     let piece_manager = PieceManager::new(piece_manager_deps, piece_manager_comms);
 
     let (peer_manager, peer_manager_sender) = PeerManager::new(
-      Bytes::copy_from_slice(&meta.info_hash),
+      handshake_buf(Bytes::copy_from_slice(&meta.info_hash), CLIENT_ID_BYTES),
       recon_clone,
-      peers,
+      peers_rx,
       piece_manager_sender,
       total_pieces as u32,
     );
 
-    let stats = Stats::new(total_pieces, total_length, stats);
+    let stats = Stats::new(total_pieces, total_length, stats_rx);
     let stats_board = stats.get_stats_receiver();
 
     let (http_urls, udp_urls) = extract_tracker_urls(&decoded_torrent);
 
-    let scheduler = Scheduler::new(scheduler, total_length, meta.piece_length);
+    let scheduler = Scheduler::new(scheduler_rx, total_length, meta.piece_length);
 
     let tracker_args = TrackerAnnounceArgs {
       info_hash,
@@ -156,6 +156,10 @@ impl Torrent {
 
   pub async fn run(self) {
     // let ui = start_stats_ui(self.stats.get_stats_receiver());
+    server::run(
+      self.stats.get_stats_receiver(),
+      "127.0.0.1:3000".to_string(),
+    );
     self.stats.run();
 
     self.piece_manager.run().await;
@@ -173,7 +177,7 @@ impl Torrent {
 
     loop {
       select! {
-        tick = interval.tick() => {
+        _ = interval.tick() => {
           // println!("A tick occured")
         }
       }

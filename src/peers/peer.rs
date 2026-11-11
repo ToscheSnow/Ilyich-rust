@@ -124,10 +124,10 @@ impl Peer {
       piece_manager_sender,
     }: PeerComms,
   ) -> Self {
-    let (from_socket_tx, from_socket) = mpsc::channel::<Bytes>(100000); // A: reader -> peer
-    let (to_socket, to_socket_rx) = mpsc::channel::<Bytes>(100000); // B: peer -> writer
+    let (from_socket_tx, from_socket) = mpsc::channel::<Bytes>(10000); // A: reader -> peer
+    let (to_socket, to_socket_rx) = mpsc::channel::<Bytes>(10000); // B: peer -> writer
 
-    let (cmd_sender, cmd_receiver) = mpsc::channel::<PeerCommand>(100000);
+    let (cmd_sender, cmd_receiver) = mpsc::channel::<PeerCommand>(10000);
 
     let available_pieces = Arc::new(RwLock::new(Vec::new()));
 
@@ -309,6 +309,7 @@ impl Peer {
         self.state.am_choking = false;
 
         self.send_unchoke_req().await;
+        println!("🍔 Peer is interested");
       }
 
       // done
@@ -318,7 +319,7 @@ impl Peer {
       }
 
       // done
-      PeerEvent::HAVE { piece_idx } => {
+      PeerEvent::HAVE(piece_idx) => {
         {
           let mut bitfield = self.available_pieces.write().unwrap();
           if !has_piece(&bitfield, piece_idx as usize) {
@@ -393,7 +394,7 @@ impl Peer {
       }
 
       //done
-      PeerEvent::BITFIELD { bitfield } => {
+      PeerEvent::BITFIELD(bitfield) => {
         {
           let mut curr_bitfield = self.available_pieces.write().unwrap();
           *curr_bitfield = bitfield.into();

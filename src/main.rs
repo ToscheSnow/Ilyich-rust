@@ -11,6 +11,7 @@ mod storage_manager;
 mod torrent;
 mod trackers;
 // mod ui;
+mod server;
 mod utils;
 
 use std::{env, path::Path};

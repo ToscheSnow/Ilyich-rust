@@ -10,10 +10,12 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 tokio = { version = "1.53.1", features = ["full"] }
 sha1 = { version = "0.10", features = ["asm"] }
 hex = "0.4"
-# ratatui = "0.29"
-memory-stats = "1"
 mimalloc = "0.1"
 lru = "0.19.0"
+axum = {version = "0.8.9", features = ["ws"]}
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+open = "5"
 
 [profile.dev]
 opt-level = 1            # your own code was unoptimized in dev, only deps were at 3

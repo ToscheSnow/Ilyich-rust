@@ -20,8 +20,6 @@ use tokio::sync::mpsc;
 use crate::{
   event::event::TorrentEvent,
   peers::{
-    client::CLIENT_ID_BYTES,
-    handshake_buf::handshake_buf,
     peer::{
       Peer,
       PeerCommand::{self, SendBitfield},
@@ -50,7 +48,7 @@ pub struct PeerManager {
   connecting_peers: HashSet<SocketAddr>,
   bitfield: Vec<u8>,
   active_peers: HashSet<PeerHandle>,
-  info_hash: Bytes,
+  handshake_buf: Bytes,
 
   message_receiver: mpsc::Receiver<PeerManagerMessage>,
   message_sender: mpsc::Sender<PeerManagerMessage>,
@@ -75,7 +73,7 @@ impl PeerManager {
         self.connecting_peers.insert(peer_address);
         Self::connect_peer(
           peer_address,
-          self.info_hash.clone(),
+          self.handshake_buf.clone(),
           self.message_sender.clone(),
           peer_reqs.clone(),
         );
@@ -85,7 +83,7 @@ impl PeerManager {
 
   fn connect_peer(
     peer_address: SocketAddr,
-    info_hash: Bytes,
+    handshake_buf: Bytes,
     reply_sender: tokio::sync::mpsc::Sender<PeerManagerMessage>,
     PeerRequirements {
       piece_manager_sender,
@@ -94,8 +92,6 @@ impl PeerManager {
     }: PeerRequirements,
   ) -> JoinHandle<()> {
     tokio::spawn(async move {
-      let handshake_buf = handshake_buf(info_hash.into(), CLIENT_ID_BYTES);
-
       let Ok(stream) = Self::connect_addr(peer_address).await else {
         return;
       };
@@ -108,7 +104,7 @@ impl PeerManager {
       };
 
       if !handshake_res.is_successful {
-        reply_sender
+        let _ = reply_sender
           .send(PeerManagerMessage::ConnectionFailed(peer_address))
           .await;
         return;
@@ -129,7 +125,7 @@ impl PeerManager {
 
       let peer: Peer = Peer::new(deps, peer_comms);
       // send a message to peer manager to add it
-      reply_sender
+      let _ = reply_sender
         .send(PeerManagerMessage::ConnectionSuccessful(
           peer_address,
           peer.get_peer_handle(),
@@ -195,7 +191,7 @@ impl PeerManager {
   }
 
   pub fn new(
-    info_hash: Bytes,
+    handshake_buf: Bytes,
     recon: Recon<TorrentEvent>,
     recon_listener: UnboundedReceiver<TorrentEvent>,
     piece_manager_sender: Sender<PieceManagerMessage>,
@@ -206,7 +202,7 @@ impl PeerManager {
     let manager: PeerManager = PeerManager {
       connecting_peers: HashSet::new(),
       active_peers: HashSet::new(),
-      info_hash,
+      handshake_buf,
       message_receiver,
       message_sender: message_sender.clone(),
       recon_listener,

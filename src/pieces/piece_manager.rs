@@ -162,9 +162,6 @@ impl PieceManager {
 
   fn spawn(mut self) -> JoinHandle<()> {
     tokio::spawn(async move {
-      let mut hit = 0;
-      let mut disk_read = 0;
-      let mut parked = 0;
       loop {
         match self.incoming_rx.recv().await {
           Some(cmd) => match cmd {
@@ -181,11 +178,9 @@ impl PieceManager {
               match block_option {
                 //send immediately
                 Some(block_data) => {
-                  hit += 1;
                   let _ = peer
                     .cmd_sender
                     .try_send(PeerCommand::SendBlock(incoming_request, block_data));
-                  println!("cache hit {}", hit);
                 }
                 None => {
                   // add this person to pending
@@ -197,8 +192,6 @@ impl PieceManager {
 
                   // only request if storage request hasnt been sent already
                   if pending_reqs.len() == 1 {
-                    disk_read += 1;
-                    println!("Disk reads {}", disk_read);
                     self
                       .storage_tx
                       .send(StorageMessage::Command(ReadPiece(BlockMeta {
@@ -206,9 +199,6 @@ impl PieceManager {
                         offset: 0,
                         length: self.geometry.get_piece_length(piece_idx),
                       })));
-                  } else {
-                    parked += 1;
-                    println!("Parked {}", parked);
                   }
                 }
               }

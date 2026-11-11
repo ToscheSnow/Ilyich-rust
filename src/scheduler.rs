@@ -3,7 +3,6 @@ use std::{
   time::{Duration, Instant},
 };
 
-use bytes::Bytes;
 use tokio::{
   select,
   sync::mpsc::{UnboundedReceiver, error::TrySendError},
@@ -16,7 +15,7 @@ use crate::{
   peers::{
     client::BLOCK_SIZE,
     peer::{
-      PeerCommand::{self, SendBitfield},
+      PeerCommand::{self},
       PeerHandle,
     },
   },
@@ -38,8 +37,6 @@ struct RateInfo {
   blocks: u32,
   per_sec: f64,
 }
-
-pub struct SchedulerDeps {}
 
 pub struct Scheduler {
   max_active_pieces: u16,

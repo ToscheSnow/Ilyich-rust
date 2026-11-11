@@ -1,5 +1,5 @@
 pub mod client;
-mod handshake_buf;
+pub mod handshake_buf;
 mod normalise_addr;
 mod parse_peer_event;
 pub mod peer;

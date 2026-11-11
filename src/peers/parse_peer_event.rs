@@ -18,12 +18,10 @@ pub fn parse_peer_event(message: Bytes) -> Result<PeerEvent, String> {
         return Err(format!("Invalid HAVE message length: {}", message.len()));
       }
       let piece_idx = u32::from_be_bytes(message[1..5].try_into().unwrap());
-      PeerEvent::HAVE { piece_idx }
+      PeerEvent::HAVE(piece_idx)
     }
 
-    5 => PeerEvent::BITFIELD {
-      bitfield: Bytes::copy_from_slice(&message[1..]),
-    },
+    5 => PeerEvent::BITFIELD(Bytes::copy_from_slice(&message[1..])),
 
     6 => {
       if message.len() != 13 {
