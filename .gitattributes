@@ -1,2 +1,2 @@
 # Treat the file as generated code (recommended for bundled/minified frontend assets)
-./assets/index.html linguist-generated=true
+assets/index.html linguist-generated=true
